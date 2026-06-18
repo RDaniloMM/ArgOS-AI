@@ -90,7 +90,9 @@ name = "argos-n8n-connector"
 version = "0.1.0"
 dependencies = [
  "argos-core",
+ "argos-knowledge",
  "async-trait",
+ "chrono",
  "reqwest",
  "serde",
  "serde_json",

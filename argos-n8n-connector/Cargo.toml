@@ -8,10 +8,14 @@ description = "Bidirectional n8n connector — discover, import, export, execute
 
 [dependencies]
 argos-core = { path = "../argos-core" }
+# BundleStore backs the workflow importer (n8n workflows → OKF concepts).
+argos-knowledge = { path = "../argos-knowledge" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
+# Timestamps on imported workflow concepts.
+chrono = { workspace = true }
 # UUID generation for stub workflow/run IDs.
 uuid = { workspace = true }
 # Production HTTP backend is feature-gated so the default build + test suite

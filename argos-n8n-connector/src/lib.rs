@@ -9,10 +9,12 @@
 
 pub mod client;
 pub mod connector;
+pub mod importer;
 pub mod rest;
 
 pub use client::{N8nClient, StubN8nClient};
 pub use connector::N8nConnector;
+pub use importer::{slugify, workflow_resource, ImportResult, WorkflowImporter};
 pub use rest::map_status;
 
 // Shared test utilities for the n8n connector unit tests (compiled only under
