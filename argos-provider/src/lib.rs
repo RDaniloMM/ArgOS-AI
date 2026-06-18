@@ -5,8 +5,10 @@
 //! [`provider::Provider`] trait is the single seam that keeps per-provider quirks
 //! out of the agent loop (ADR-005). Implementation lands in later tasks.
 
+pub mod ollama;
 pub mod provider;
 
+pub use ollama::{HttpClient, OllamaConfig, OllamaProvider, StubHttpClient};
 pub use provider::{
     Completion, CompletionOptions, FinishReason, Provider, ProviderCapabilities, TokenUsage,
 };
