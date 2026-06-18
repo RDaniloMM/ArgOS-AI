@@ -6,7 +6,11 @@
 //! lands in later tasks.
 
 pub mod traits;
+pub mod vault;
 
 pub use traits::{
     AuditEntry, AuditFilter, AuditLog, Permission, PermissionGate, PermissionSet, SecretVault,
 };
+#[cfg(feature = "keyring-backend")]
+pub use vault::KeyringVault;
+pub use vault::MemoryVault;

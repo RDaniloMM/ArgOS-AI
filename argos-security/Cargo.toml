@@ -12,6 +12,13 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
+# Production OS-keyring backend is feature-gated so the default build + test
+# suite stay platform-free. MemoryVault provides the in-memory backend always.
+keyring = { workspace = true, optional = true }
+
+[features]
+default = []
+keyring-backend = ["keyring"]
 
 [dev-dependencies]
 tokio = { workspace = true }
