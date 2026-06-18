@@ -8,6 +8,8 @@
 
 pub mod sqlite;
 pub mod traits;
+pub mod vector;
 
 pub use sqlite::SqliteRelationalStore;
 pub use traits::{BlobStore, RelationalStore, Storage, VectorMetadata, VectorStore};
+pub use vector::InMemoryVectorStore;
