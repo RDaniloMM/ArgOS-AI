@@ -78,6 +78,13 @@ impl StubN8nClient {
             runs: Mutex::new(HashMap::new()),
         }
     }
+
+    /// Look up the stored definition for a workflow id (test inspection helper
+    /// used by the exporter tests to verify a definition round-tripped through
+    /// `create_workflow`). Returns `None` when no definition was stored.
+    pub fn definition_of(&self, id: &str) -> Option<String> {
+        self.definitions.lock().unwrap().get(id).cloned()
+    }
 }
 
 impl Default for StubN8nClient {
