@@ -6,10 +6,12 @@
 //! lands in later tasks.
 
 pub mod audit;
+pub mod permission;
 pub mod traits;
 pub mod vault;
 
 pub use audit::HashChainAuditLog;
+pub use permission::MatrixPermissionGate;
 pub use traits::{
     AuditEntry, AuditFilter, AuditLog, Permission, PermissionGate, PermissionSet, SecretVault,
 };
