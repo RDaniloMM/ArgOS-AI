@@ -6,6 +6,8 @@
 //! backs them with SQLite + sqlite-vec + the filesystem, Team profile with
 //! Postgres + Qdrant + S3. No embedded-specific SQL leaks through the trait seam.
 
+pub mod sqlite;
 pub mod traits;
 
+pub use sqlite::SqliteRelationalStore;
 pub use traits::{BlobStore, RelationalStore, Storage, VectorMetadata, VectorStore};

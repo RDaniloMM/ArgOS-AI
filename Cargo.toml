@@ -36,3 +36,5 @@ url = { version = "2", features = ["serde"] }
 toml = "0.8"
 async-trait = "0.1"
 sha2 = "0.10"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tempfile = "3"
