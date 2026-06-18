@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target
+
+# ArgOS runtime data directory (wiki source of truth + regenerable derived indexes)
+.argos/
+
+# SQLite database files (runtime, regenerable from .argos/wiki/)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# sqlite-vec index databases (regenerable via `argos reindex`)
+*.index.db

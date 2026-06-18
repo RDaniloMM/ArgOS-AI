@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "argos-core",
+    "argos-storage",
+    "argos-knowledge",
+    "argos-n8n-connector",
+    "argos-workflow-intelligence",
+    "argos-agent",
+    "argos-provider",
+    "argos-security",
+    "argos-mcp",
+    "argos-cli",
+    "argos-lib",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/RDaniloMM/ArgOS-AI"
+rust-version = "1.75"
+
+# Shared dependencies inherited by member crates via `dep.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+url = { version = "2", features = ["serde"] }
+toml = "0.8"
