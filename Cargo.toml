@@ -42,3 +42,6 @@ tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # OS keyring backend (feature-gated per crate); windows-sys needs no extra linker.
 keyring = "3"
+# OKF bundle directory traversal (argos-knowledge) and link/wikilink parsing.
+walkdir = "2"
+regex = "1"

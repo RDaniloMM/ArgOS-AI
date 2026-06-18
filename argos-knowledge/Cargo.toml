@@ -4,3 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "OKF bundle management — concept CRUD, frontmatter parsing, cross-links, typed relations"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+walkdir = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
