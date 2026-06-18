@@ -7,9 +7,11 @@
 //! ships a single generic agent (`Hand::None`). Implementation lands in later tasks.
 
 pub mod agent;
+pub mod generic_agent;
 pub mod registry;
 
 pub use agent::{Agent, AgentOutput};
+pub use generic_agent::GenericAgent;
 pub use registry::{ToolHandler, ToolInfo, ToolRegistry};
 
 #[cfg(test)]
