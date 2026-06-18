@@ -12,6 +12,7 @@ members = [
     "argos-mcp",
     "argos-cli",
     "argos-lib",
+    "argos-wasm",
 ]
 
 [workspace.package]
@@ -45,3 +46,10 @@ keyring = "3"
 # OKF bundle directory traversal (argos-knowledge) and link/wikilink parsing.
 walkdir = "2"
 regex = "1"
+# CLI argument parsing (argos-cli).
+clap = { version = "4", features = ["derive"] }
+# WASM extension sandbox (argos-wasm, Tier-3, deferred in slice 1).
+wasmtime = { version = "45", default-features = false }
+# E2E/CLI integration tests.
+assert_cmd = "2"
+predicates = "3"

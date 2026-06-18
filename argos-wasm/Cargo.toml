@@ -1,0 +1,21 @@
+[package]
+name = "argos-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM extension tier — sandboxed community skills via wasmtime (Tier-3, deferred in slice 1)"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+wasmtime = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+wasm-backend = ["wasmtime"]

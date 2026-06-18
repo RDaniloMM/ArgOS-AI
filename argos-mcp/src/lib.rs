@@ -19,3 +19,11 @@ pub mod server;
 pub mod server_impl;
 pub mod transport;
 pub mod types;
+
+pub use client::McpClient;
+pub use server::McpServer;
+pub use transport::McpTransport;
+pub use types::{
+    McpCapabilities, McpServerConfig, McpServerInfo, McpServerState, McpToolExposedEvent,
+    McpToolProxy, McpTransportType,
+};

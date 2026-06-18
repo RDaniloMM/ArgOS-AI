@@ -4,3 +4,31 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "ArgOS command-line interface"
+
+[[bin]]
+name = "argos"
+path = "src/main.rs"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+argos-agent = { path = "../argos-agent" }
+argos-knowledge = { path = "../argos-knowledge" }
+argos-n8n-connector = { path = "../argos-n8n-connector" }
+argos-workflow-intelligence = { path = "../argos-workflow-intelligence" }
+argos-provider = { path = "../argos-provider" }
+argos-security = { path = "../argos-security" }
+argos-storage = { path = "../argos-storage" }
+argos-mcp = { path = "../argos-mcp" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

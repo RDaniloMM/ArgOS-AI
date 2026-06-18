@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "ArgOS unified library facade — re-exports all bounded contexts"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+argos-storage = { path = "../argos-storage" }
+argos-provider = { path = "../argos-provider" }
+argos-security = { path = "../argos-security" }
+argos-knowledge = { path = "../argos-knowledge" }
+argos-n8n-connector = { path = "../argos-n8n-connector" }
+argos-workflow-intelligence = { path = "../argos-workflow-intelligence" }
+argos-agent = { path = "../argos-agent" }
+argos-mcp = { path = "../argos-mcp" }
+argos-wasm = { path = "../argos-wasm" }
+serde = { workspace = true }
