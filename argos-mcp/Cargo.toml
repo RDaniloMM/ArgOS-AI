@@ -4,3 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+argos-agent = { path = "../argos-agent" }
+argos-security = { path = "../argos-security" }
+argos-n8n-connector = { path = "../argos-n8n-connector" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+url.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+default = []
+http-transport = []

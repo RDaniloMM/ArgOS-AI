@@ -93,6 +93,19 @@ version = "0.1.0"
 [[package]]
 name = "argos-mcp"
 version = "0.1.0"
+dependencies = [
+ "argos-agent",
+ "argos-core",
+ "argos-n8n-connector",
+ "argos-security",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "argos-n8n-connector"
