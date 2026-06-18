@@ -4,3 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Workflow intelligence — vectorize, similarity search, recommend reuse, typed cross-links (ADR-008)"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+argos-storage = { path = "../argos-storage" }
+argos-provider = { path = "../argos-provider" }
+argos-knowledge = { path = "../argos-knowledge" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+# Frontmatter tests need a `DateTime<Utc>` timestamp; production code does not
+# construct timestamps, so chrono stays a dev-only dependency.
+chrono = { workspace = true }

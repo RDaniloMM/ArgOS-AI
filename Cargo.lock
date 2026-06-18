@@ -146,6 +146,17 @@ dependencies = [
 [[package]]
 name = "argos-workflow-intelligence"
 version = "0.1.0"
+dependencies = [
+ "argos-core",
+ "argos-knowledge",
+ "argos-provider",
+ "argos-storage",
+ "async-trait",
+ "chrono",
+ "serde",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "async-trait"
