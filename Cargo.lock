@@ -37,8 +37,16 @@ name = "argos-agent"
 version = "0.1.0"
 dependencies = [
  "argos-core",
+ "argos-knowledge",
+ "argos-n8n-connector",
+ "argos-provider",
+ "argos-security",
+ "argos-storage",
+ "argos-workflow-intelligence",
  "async-trait",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 

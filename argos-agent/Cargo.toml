@@ -4,12 +4,26 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Agent runtime trait and lifecycle for ArgOS"
+description = "Agent runtime — tool-call loop, Tier-1 tools, and lifecycle for ArgOS"
 
 [dependencies]
 argos-core = { path = "../argos-core" }
+# Tier-1 tools wrap the knowledge LLM-Wiki operations (ingest/query/lint).
+argos-knowledge = { path = "../argos-knowledge" }
+# n8n.list / n8n.run tools wrap the n8n client trait.
+argos-n8n-connector = { path = "../argos-n8n-connector" }
+# workflow.recommend_reuse wraps the reuse recommender.
+argos-workflow-intelligence = { path = "../argos-workflow-intelligence" }
+# The tool-call loop drives completions through the Provider abstraction.
+argos-provider = { path = "../argos-provider" }
+# Reuse recommendation needs a VectorStore (injected, not implemented here).
+argos-storage = { path = "../argos-storage" }
+# Permission gating seam (wired into the loop in a later task).
+argos-security = { path = "../argos-security" }
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tempfile = { workspace = true }
