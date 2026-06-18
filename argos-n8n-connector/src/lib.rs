@@ -9,6 +9,13 @@
 
 pub mod client;
 pub mod connector;
+pub mod rest;
 
 pub use client::{N8nClient, StubN8nClient};
 pub use connector::N8nConnector;
+pub use rest::map_status;
+
+// Shared test utilities for the n8n connector unit tests (compiled only under
+// test).
+#[cfg(test)]
+mod test_support;

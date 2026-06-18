@@ -14,6 +14,10 @@ use argos_core::{ArgosError, N8nRunRef, N8nRunStatus, N8nWorkflowRef, Result};
 use async_trait::async_trait;
 use uuid::Uuid;
 
+// `Url` is only needed by the feature-gated REST backend.
+#[cfg(feature = "reqwest-backend")]
+use url::Url;
+
 /// Transport seam to an n8n instance.
 ///
 /// All methods are async and return [`argos_core::Result`]. MCP is the
@@ -158,6 +162,191 @@ impl N8nClient for StubN8nClient {
     async fn health_check(&self) -> Result<()> {
         Ok(())
     }
+}
+
+/// Production REST backend for [`N8nClient`] (feature `reqwest-backend`).
+///
+/// Talks to n8n's Public REST API (`/api/v1/workflows`, `/api/v1/executions`,
+/// `/healthz`) using `reqwest` with rustls — no native TLS, so it links no
+/// `link.exe` on Windows GNU. Authentication is the `X-N8N-API-KEY` header;
+/// the key itself is resolved by the caller from the SecretVault and passed
+/// here, never stored in config. Transport failures and non-2xx responses are
+/// mapped to [`ArgosError::N8nConnection`] so the connector degrades
+/// gracefully when n8n is unreachable.
+#[cfg(feature = "reqwest-backend")]
+pub struct ReqwestN8nClient {
+    http: reqwest::Client,
+    endpoint: Url,
+    api_key: Option<String>,
+}
+
+#[cfg(feature = "reqwest-backend")]
+impl ReqwestN8nClient {
+    /// Create a REST client targeting `endpoint` with an optional API key.
+    pub fn new(endpoint: Url, api_key: Option<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            endpoint,
+            api_key,
+        }
+    }
+
+    /// Join `path` onto the configured endpoint (no double slashes).
+    fn url(&self, path: &str) -> String {
+        let base = self.endpoint.as_str().trim_end_matches('/');
+        format!("{base}{path}")
+    }
+
+    /// Attach the API key header to a request builder when configured.
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => req.header("X-N8N-API-KEY", key),
+            None => req,
+        }
+    }
+
+    /// Run a GET, returning the body text or an `N8nConnection` error.
+    async fn get_text(&self, path: &str) -> Result<String> {
+        let resp = self
+            .authed(self.http.get(self.url(path)))
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n unreachable: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n read failed: {e}")))?;
+        if !status.is_success() {
+            return Err(ArgosError::N8nConnection(format!(
+                "n8n returned {status}: {text}"
+            )));
+        }
+        Ok(text)
+    }
+
+    /// Run a POST with a JSON body, returning the body text.
+    async fn post_text(&self, path: &str, body: String) -> Result<String> {
+        let resp = self
+            .authed(
+                self.http
+                    .post(self.url(path))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body),
+            )
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n unreachable: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n read failed: {e}")))?;
+        if !status.is_success() {
+            return Err(ArgosError::N8nConnection(format!(
+                "n8n returned {status}: {text}"
+            )));
+        }
+        Ok(text)
+    }
+
+    /// Run a PUT with a JSON body, returning the body text.
+    async fn put_text(&self, path: &str, body: String) -> Result<String> {
+        let resp = self
+            .authed(
+                self.http
+                    .put(self.url(path))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body),
+            )
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n unreachable: {e}")))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("n8n read failed: {e}")))?;
+        if !status.is_success() {
+            return Err(ArgosError::N8nConnection(format!(
+                "n8n returned {status}: {text}"
+            )));
+        }
+        Ok(text)
+    }
+}
+
+#[cfg(feature = "reqwest-backend")]
+#[async_trait]
+impl N8nClient for ReqwestN8nClient {
+    async fn list_workflows(&self) -> Result<Vec<N8nWorkflowRef>> {
+        let body = self.get_text("/api/v1/workflows").await?;
+        crate::rest::parse_workflow_list(&body)
+    }
+
+    async fn get_workflow(&self, id: &str) -> Result<N8nWorkflowRef> {
+        let body = self.get_text(&format!("/api/v1/workflows/{id}")).await?;
+        crate::rest::parse_workflow(&body)
+    }
+
+    async fn create_workflow(&self, name: &str, definition: &str) -> Result<N8nWorkflowRef> {
+        let req = build_workflow_payload(name, definition);
+        let body = self.post_text("/api/v1/workflows", req).await?;
+        crate::rest::parse_workflow(&body)
+    }
+
+    async fn update_workflow(
+        &self,
+        id: &str,
+        name: &str,
+        definition: &str,
+    ) -> Result<N8nWorkflowRef> {
+        let req = build_workflow_payload(name, definition);
+        let body = self
+            .put_text(&format!("/api/v1/workflows/{id}"), req)
+            .await?;
+        crate::rest::parse_workflow(&body)
+    }
+
+    async fn run_workflow(&self, id: &str, data: Option<&str>) -> Result<N8nRunRef> {
+        let req = match data {
+            Some(d) => format!(r#"{{"data":{d}}}"#),
+            None => r#"{"data":{}}"#.to_string(),
+        };
+        let body = self
+            .post_text(&format!("/api/v1/workflows/{id}/run"), req)
+            .await?;
+        crate::rest::parse_run(&body)
+    }
+
+    async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus> {
+        let body = self
+            .get_text(&format!("/api/v1/executions/{run_id}"))
+            .await?;
+        crate::rest::parse_status(&body)
+    }
+
+    async fn health_check(&self) -> Result<()> {
+        self.get_text("/healthz").await.map(|_| ())
+    }
+}
+
+/// Build a `POST/PUT /api/v1/workflows` JSON payload from a name and a raw
+/// n8n workflow `definition`. The definition is embedded under `nodes` when it
+/// parses as an object carrying `nodes`; otherwise it is sent as the request
+/// body verbatim wrapped in `{name, ...}`.
+#[cfg(feature = "reqwest-backend")]
+fn build_workflow_payload(name: &str, definition: &str) -> String {
+    if let Ok(mut obj) = serde_json::from_str::<serde_json::Value>(definition) {
+        if let Some(map) = obj.as_object_mut() {
+            map.insert(
+                "name".to_string(),
+                serde_json::Value::String(name.to_string()),
+            );
+            return serde_json::to_string(&obj).unwrap_or_else(|_| definition.to_string());
+        }
+    }
+    format!(r#"{{"name":"{name}","definition":{definition}}}"#)
 }
 
 #[cfg(test)]
@@ -308,5 +497,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(run.status, N8nRunStatus::Success);
+    }
+
+    // --- ReqwestN8nClient (feature-gated compile check) ---------------------
+    // The production REST backend is only compiled under `reqwest-backend`.
+    // This test merely proves the type exists and is constructible; it makes
+    // no HTTP call. Run with: cargo test -p argos-n8n-connector --features reqwest-backend
+    #[cfg(feature = "reqwest-backend")]
+    #[test]
+    fn reqwest_n8n_client_type_exists() {
+        use url::Url;
+        let endpoint = Url::parse("http://localhost:5678").unwrap();
+        let _client = super::ReqwestN8nClient::new(endpoint, None);
+    }
+
+    #[cfg(feature = "reqwest-backend")]
+    #[tokio::test]
+    async fn reqwest_n8n_client_implements_n8n_client_trait() {
+        use url::Url;
+        let endpoint = Url::parse("http://localhost:5678").unwrap();
+        let client = super::ReqwestN8nClient::new(endpoint, Some("key".into()));
+        // The trait is implemented: we can box it as `dyn N8nClient`.
+        let _boxed: Box<dyn N8nClient> = Box::new(client);
     }
 }
