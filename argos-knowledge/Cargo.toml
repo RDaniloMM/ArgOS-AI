@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "OKF bundle management — concept CRUD, frontmatter parsing, cross-links, typed relations"
+description = "OKF bundle management — concept CRUD, frontmatter parsing, cross-links, typed relations, LLM-Wiki ingest/query/lint"
 
 [dependencies]
 argos-core = { path = "../argos-core" }
+# Provider trait backs the LLM-Wiki ingest/query operations (ADR-010). Default
+# features pull in no reqwest, so the crate stays network-free for tests.
+argos-provider = { path = "../argos-provider" }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
@@ -17,3 +20,7 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# `#[tokio::test]` drives the async ingest/query operations; async-trait backs
+# the in-test `StubProvider` impl of the `Provider` trait.
+tokio = { workspace = true }
+async-trait = { workspace = true }

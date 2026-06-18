@@ -93,6 +93,12 @@ impl BundleStore {
             let rel = p.strip_prefix(&self.root).map_err(|e| {
                 ArgosError::Knowledge(format!("concept path outside bundle root: {e}"))
             })?;
+            // Exclude OKF special files (index.md, log.md, schema.md) — they
+            // are bundle-level metadata, not concepts with frontmatter.
+            let rel_str = rel.to_string_lossy();
+            if rel_str == "index.md" || rel_str == "log.md" || rel_str == "schema.md" {
+                continue;
+            }
             paths.push(ConceptPath::new(to_forward_slashes(rel)));
         }
         // `ConceptPath` is `Eq + Hash` but not `Ord`; order by the underlying
@@ -113,6 +119,33 @@ impl BundleStore {
             concepts,
         })
     }
+
+    /// Read the OKF `index.md` content catalogue at the bundle root.
+    ///
+    /// Returns an empty string when no index exists yet (not an error): a
+    /// fresh wiki has no index until the first ingest writes one.
+    pub fn read_index(&self) -> Result<String> {
+        read_text_or_empty(&self.root.join("index.md"))
+    }
+
+    /// Overwrite the OKF `index.md` content catalogue, creating the bundle
+    /// root if needed.
+    pub fn write_index(&self, content: &str) -> Result<()> {
+        write_text(&self.root.join("index.md"), content)
+    }
+
+    /// Read the OKF `log.md` chronological log at the bundle root.
+    ///
+    /// Returns an empty string when no log exists yet (not an error).
+    pub fn read_log(&self) -> Result<String> {
+        read_text_or_empty(&self.root.join("log.md"))
+    }
+
+    /// Append `entry` to the OKF `log.md`, creating the file (and root) if
+    /// absent. Log entries follow `## [date] operation | title` (ADR-010).
+    pub fn append_log(&self, entry: &str) -> Result<()> {
+        append_text(&self.root.join("log.md"), entry)
+    }
 }
 
 /// Normalise a relative path to forward slashes (the OKF path convention).
@@ -123,6 +156,39 @@ impl BundleStore {
 fn to_forward_slashes(p: &Path) -> PathBuf {
     let s = p.to_string_lossy().replace('\\', "/");
     PathBuf::from(s)
+}
+
+/// Read a text file, returning an empty string when it is absent (NotFound is
+/// treated as "no file yet", not an error). Other I/O errors propagate.
+fn read_text_or_empty(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(ArgosError::Io(e.to_string())),
+    }
+}
+
+/// Overwrite `path` with `content`, creating parent directories as needed.
+fn write_text(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
+/// Append `content` to `path`, creating the file (and parents) if absent.
+fn append_text(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(content.as_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -252,5 +318,62 @@ mod tests {
         let (_dir, store) = tmp_store();
         let res = store.read_concept(&ConceptPath::new("nope.md"));
         assert!(res.is_err());
+    }
+
+    // --- index.md / log.md (OKF bundle special files, ADR-010) --------------
+
+    #[test]
+    fn read_index_returns_empty_when_no_index_md() {
+        let (_dir, store) = tmp_store();
+        // No `index.md` written yet -> empty string, NOT an error.
+        assert_eq!(store.read_index().unwrap(), "");
+    }
+
+    #[test]
+    fn write_index_creates_index_md_with_content() {
+        let (_dir, store) = tmp_store();
+        store
+            .write_index("# Wiki Index\n\n- [Daily](workflows/daily.md)\n")
+            .expect("write_index should succeed");
+        // The file exists at the bundle root and round-trips.
+        assert_eq!(
+            store.read_index().unwrap(),
+            "# Wiki Index\n\n- [Daily](workflows/daily.md)\n"
+        );
+    }
+
+    #[test]
+    fn read_index_returns_content_after_write_index() {
+        let (_dir, store) = tmp_store();
+        let body = "- [A](a.md)\n- [B](b.md)\n";
+        store.write_index(body).unwrap();
+        assert_eq!(store.read_index().unwrap(), body);
+    }
+
+    #[test]
+    fn read_log_returns_empty_when_no_log_md() {
+        let (_dir, store) = tmp_store();
+        // No `log.md` written yet -> empty string, NOT an error.
+        assert_eq!(store.read_log().unwrap(), "");
+    }
+
+    #[test]
+    fn append_log_creates_log_md_with_first_entry() {
+        let (_dir, store) = tmp_store();
+        let entry = "## [2026-06-18] ingest | Daily Standup\n";
+        store.append_log(entry).expect("append_log should succeed");
+        // First append creates `log.md` containing exactly the entry.
+        assert_eq!(store.read_log().unwrap(), entry);
+    }
+
+    #[test]
+    fn append_log_appends_to_existing_log_preserving_order() {
+        let (_dir, store) = tmp_store();
+        let first = "## [2026-06-17] ingest | A\n";
+        let second = "## [2026-06-18] ingest | B\n";
+        store.append_log(first).unwrap();
+        store.append_log(second).unwrap();
+        // Both entries present in insertion order.
+        assert_eq!(store.read_log().unwrap(), format!("{first}{second}"));
     }
 }

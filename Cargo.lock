@@ -64,12 +64,15 @@ name = "argos-knowledge"
 version = "0.1.0"
 dependencies = [
  "argos-core",
+ "argos-provider",
+ "async-trait",
  "chrono",
  "regex",
  "serde",
  "serde_yaml",
  "sha2",
  "tempfile",
+ "tokio",
  "walkdir",
 ]
 
