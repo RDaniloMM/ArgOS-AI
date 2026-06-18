@@ -1,2 +1,2 @@
-# ChronOS
-ChronOS: Agent Operating System.
+# ArgOS
+ArgOS: Agent Operating System.
