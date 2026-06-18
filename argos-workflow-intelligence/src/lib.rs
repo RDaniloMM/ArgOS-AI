@@ -10,8 +10,10 @@
 //! contradicts/supports) are stored and surfaced but NOT blended into similarity
 //! scoring. Phase 2 adds the structure + I/O + relations blend.
 
+pub mod similarity;
 pub mod vectorizer;
 
+pub use similarity::SimilaritySearch;
 pub use vectorizer::{concept_to_text, WorkflowVectorizer};
 
 #[cfg(test)]
