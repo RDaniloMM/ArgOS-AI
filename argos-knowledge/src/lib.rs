@@ -20,6 +20,8 @@ pub mod lint;
 pub mod parser;
 pub mod query;
 pub mod raw;
+pub mod reindex;
+pub mod schema;
 
 pub use bundle::BundleStore;
 pub use ingest::{IngestOperation, IngestResult};
@@ -28,6 +30,8 @@ pub use lint::{LintOperation, LintReport};
 pub use parser::{OkfParser, OkfWriter};
 pub use query::{QueryOperation, QueryResult};
 pub use raw::RawSourceStore;
+pub use reindex::{ReindexOperation, ReindexResult};
+pub use schema::Schema;
 
 // Shared test utilities for the LLM-Wiki operations (compiled only under test).
 #[cfg(test)]
