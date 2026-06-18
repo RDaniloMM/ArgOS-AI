@@ -14,6 +14,8 @@ pub mod importer;
 pub mod rest;
 pub mod runner;
 
+#[cfg(feature = "reqwest-backend")]
+pub use client::ReqwestN8nClient;
 pub use client::{N8nClient, StubN8nClient};
 pub use connector::N8nConnector;
 pub use exporter::WorkflowExporter;
