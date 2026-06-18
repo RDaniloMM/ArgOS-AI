@@ -22,10 +22,14 @@ uuid = { workspace = true }
 # stay network-free and avoid native-TLS/linker risk on Windows GNU. The
 # `N8nClient` trait is the seam; production enables `reqwest-backend`.
 reqwest = { workspace = true, optional = true }
+# `tokio::time::sleep` is used in run_workflow (feature-gated) to wait for n8n
+# to register an execution after a webhook trigger. Under the default feature
+# set this is dead code; under `reqwest-backend` it is required.
+tokio = { workspace = true, optional = true }
 
 [features]
 default = []
-reqwest-backend = ["reqwest"]
+reqwest-backend = ["reqwest", "tokio"]
 
 [dev-dependencies]
 tokio = { workspace = true }

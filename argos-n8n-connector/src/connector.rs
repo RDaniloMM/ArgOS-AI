@@ -107,6 +107,16 @@ impl N8nConnector {
         self.client.run_workflow(id, data).await
     }
 
+    /// Activate a workflow so its triggers become live.
+    pub async fn activate_workflow(&self, id: &str) -> Result<()> {
+        self.client.activate_workflow(id).await
+    }
+
+    /// Deactivate a workflow, stopping its triggers.
+    pub async fn deactivate_workflow(&self, id: &str) -> Result<()> {
+        self.client.deactivate_workflow(id).await
+    }
+
     /// Poll the status of a run.
     pub async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus> {
         self.client.get_run_status(run_id).await

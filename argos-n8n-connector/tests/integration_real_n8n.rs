@@ -105,45 +105,52 @@ async fn real_n8n_create_and_get_workflow() {
 async fn real_n8n_run_workflow() {
     let client = real_client();
 
-    // Create a workflow with a schedule trigger (required for activation).
-    let def = r#"{"name":"ArgOS Run Test","nodes":[{"name":"Schedule","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1,"position":[250,300],"parameters":{"rule":{"interval":[{"field":"minutes","minutesInterval":5}]}}},{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{}}],"connections":{"Schedule":{"main":[[{"node":"NoOp","type":"main","index":0}]]}},"settings":{}}"#;
+    // Create a workflow with a webhook trigger (required for external execution).
+    let def = r#"{"name":"ArgOS Run Test","nodes":[{"name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"parameters":{"httpMethod":"POST","path":"argos-run-test","responseMode":"onReceived"},"webhookId":"argos-run-test-001"},{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{}}],"connections":{"Webhook":{"main":[[{"node":"NoOp","type":"main","index":0}]]}},"settings":{}}"#;
     let created = client
         .create_workflow("ArgOS Run Test", def)
         .await
         .expect("create_workflow should succeed");
+    println!("Created workflow: {} (id: {})", created.name, created.id);
 
-    // Attempt to run the workflow. n8n v2.26's Public API may return 405
-    // (Method Not Allowed) for the /run endpoint — execution via the Public
-    // API is not supported in all n8n versions. This test verifies the
-    // connector communicates with n8n correctly; the run may fail with a
-    // 405, which is an n8n API limitation, not a connector bug.
-    let run_result = client.run_workflow(&created.id, None).await;
+    // Activate the workflow (webhooks only work when the workflow is active).
+    client
+        .activate_workflow(&created.id)
+        .await
+        .expect("activate_workflow should succeed");
+    println!("Workflow activated");
 
-    match run_result {
-        Ok(run) => {
-            println!(
-                "Run started: id={}, workflow={}, status={:?}",
-                run.id, run.workflow_id, run.status
-            );
-            // Check the run status if we got a run ID.
-            if let Ok(status) = client.get_run_status(&run.id).await {
-                println!("Run status: {:?}", status);
-                assert!(
-                    matches!(
-                        status,
-                        N8nRunStatus::Running | N8nRunStatus::Success | N8nRunStatus::Failed
-                    ),
-                    "status should be a valid run state"
-                );
-            }
-        }
-        Err(argos_core::ArgosError::N8nConnection(msg)) if msg.contains("405") => {
-            // n8n v2.26 Public API does not support POST /workflows/{id}/run.
-            // This is a known limitation — execution requires the internal API.
-            println!("n8n returned 405 for /run — Public API execution not supported in this n8n version. Connector communication verified.");
-        }
-        Err(e) => panic!("run_workflow failed with unexpected error: {:?}", e),
-    }
+    // Give n8n a moment to register the webhook.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    // Run the workflow by triggering its webhook with data.
+    let run = client
+        .run_workflow(&created.id, Some(r#"{"message":"hello from ArgOS"}"#))
+        .await
+        .expect("run_workflow should succeed via webhook");
+    println!(
+        "Run started: id={}, workflow={}, status={:?}",
+        run.id, run.workflow_id, run.status
+    );
+
+    // The run should have a valid execution ID.
+    assert!(
+        !run.id.is_empty(),
+        "run should have a non-empty execution id"
+    );
+    assert_eq!(run.workflow_id, created.id);
+
+    // Check the run status via the executions API.
+    let status = client
+        .get_run_status(&run.id)
+        .await
+        .expect("get_run_status should succeed");
+    println!("Final run status: {:?}", status);
+    assert!(
+        matches!(status, N8nRunStatus::Success | N8nRunStatus::Running),
+        "webhook-triggered workflow should succeed or be running, got {:?}",
+        status
+    );
 }
 
 #[tokio::test]

@@ -39,7 +39,15 @@ pub trait N8nClient: Send + Sync {
         name: &str,
         definition: &str,
     ) -> Result<N8nWorkflowRef>;
+    /// Activate a workflow so its triggers (webhook, schedule) become live.
+    /// Required before `run_workflow` can trigger a webhook-based workflow.
+    async fn activate_workflow(&self, id: &str) -> Result<()>;
+    /// Deactivate a workflow, stopping its triggers.
+    async fn deactivate_workflow(&self, id: &str) -> Result<()>;
     /// Execute a workflow by id, optionally passing input `data` (JSON).
+    ///
+    /// For webhook-based workflows, this triggers the webhook endpoint and
+    /// polls executions for the result. The workflow must be activated first.
     async fn run_workflow(&self, id: &str, data: Option<&str>) -> Result<N8nRunRef>;
     /// Poll the status of a run by its run id.
     async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus>;
@@ -56,6 +64,7 @@ pub struct StubN8nClient {
     workflows: Mutex<HashMap<String, N8nWorkflowRef>>,
     definitions: Mutex<HashMap<String, String>>,
     runs: Mutex<HashMap<String, N8nRunRef>>,
+    active: Mutex<HashMap<String, bool>>,
 }
 
 impl StubN8nClient {
@@ -65,6 +74,7 @@ impl StubN8nClient {
             workflows: Mutex::new(HashMap::new()),
             definitions: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
         }
     }
 
@@ -76,6 +86,7 @@ impl StubN8nClient {
             workflows: Mutex::new(map),
             definitions: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
         }
     }
 
@@ -157,6 +168,30 @@ impl N8nClient for StubN8nClient {
         };
         self.runs.lock().unwrap().insert(run_id, run.clone());
         Ok(run)
+    }
+
+    async fn activate_workflow(&self, id: &str) -> Result<()> {
+        let workflows = self.workflows.lock().unwrap();
+        if !workflows.contains_key(id) {
+            return Err(ArgosError::NotFound(format!(
+                "n8n workflow not found: {id}"
+            )));
+        }
+        drop(workflows);
+        self.active.lock().unwrap().insert(id.to_string(), true);
+        Ok(())
+    }
+
+    async fn deactivate_workflow(&self, id: &str) -> Result<()> {
+        let workflows = self.workflows.lock().unwrap();
+        if !workflows.contains_key(id) {
+            return Err(ArgosError::NotFound(format!(
+                "n8n workflow not found: {id}"
+            )));
+        }
+        drop(workflows);
+        self.active.lock().unwrap().insert(id.to_string(), false);
+        Ok(())
     }
 
     async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus> {
@@ -316,14 +351,115 @@ impl N8nClient for ReqwestN8nClient {
     }
 
     async fn run_workflow(&self, id: &str, data: Option<&str>) -> Result<N8nRunRef> {
-        let req = match data {
-            Some(d) => format!(r#"{{"data":{d}}}"#),
-            None => r#"{"data":{}}"#.to_string(),
-        };
-        let body = self
-            .post_text(&format!("/api/v1/workflows/{id}/run"), req)
+        // n8n's Public API does NOT support POST /workflows/{id}/run (returns
+        // 405). Real execution works via webhook triggers: the workflow must
+        // have a webhook node, be activated, and then we POST to the webhook
+        // URL. This implementation follows that flow.
+
+        // 1. Get the workflow definition to find the webhook node.
+        let wf_body = self.get_text(&format!("/api/v1/workflows/{id}")).await?;
+        let wf_json: serde_json::Value = serde_json::from_str(&wf_body)
+            .map_err(|e| ArgosError::N8nConnection(format!("invalid workflow response: {e}")))?;
+
+        // 2. Find the webhook path.
+        let webhook_path = crate::rest::extract_webhook_path(&wf_json).ok_or_else(|| {
+            ArgosError::N8nConnection(
+                "workflow has no webhook trigger — cannot execute externally. \
+                 Add a webhook node to the workflow, or use a schedule trigger."
+                    .to_string(),
+            )
+        })?;
+
+        // 3. POST to the webhook URL to trigger execution.
+        let webhook_url = format!(
+            "{}/webhook/{}",
+            self.endpoint.as_str().trim_end_matches('/'),
+            webhook_path
+        );
+        let body = data.unwrap_or("{}");
+        let resp = self
+            .http
+            .post(&webhook_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("webhook trigger failed: {e}")))?;
+
+        let status_code = resp.status();
+        let resp_text = resp
+            .text()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("webhook response read failed: {e}")))?;
+
+        if !status_code.is_success() {
+            if status_code.as_u16() == 404 {
+                return Err(ArgosError::N8nConnection(
+                    "webhook not found — the workflow may not be active. \
+                     Activate the workflow first with activate_workflow()."
+                        .to_string(),
+                ));
+            }
+            return Err(ArgosError::N8nConnection(format!(
+                "webhook returned {status_code}: {resp_text}"
+            )));
+        }
+
+        // 4. Wait briefly for n8n to register the execution.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // 5. Query executions for this workflow to find the latest run.
+        let exec_body = self
+            .get_text(&format!("/api/v1/executions?workflowId={id}"))
             .await?;
-        crate::rest::parse_run(&body)
+        crate::rest::parse_latest_execution(&exec_body, id)
+    }
+
+    async fn activate_workflow(&self, id: &str) -> Result<()> {
+        let resp = self
+            .authed(
+                self.http
+                    .post(self.url(&format!("/api/v1/workflows/{id}/activate")))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            )
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("activate failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(ArgosError::N8nConnection(format!(
+                "activate returned {status}: {text}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn deactivate_workflow(&self, id: &str) -> Result<()> {
+        let resp = self
+            .authed(
+                self.http
+                    .post(self.url(&format!("/api/v1/workflows/{id}/deactivate")))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
+            )
+            .send()
+            .await
+            .map_err(|e| ArgosError::N8nConnection(format!("deactivate failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(ArgosError::N8nConnection(format!(
+                "deactivate failed: {text}"
+            )));
+        }
+        Ok(())
     }
 
     async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus> {

@@ -55,9 +55,14 @@ pub(crate) fn parse_workflow(body: &str) -> Result<N8nWorkflowRef> {
     workflow_from_value(&v)
 }
 
-/// Parse an execution/run object (`POST /api/v1/workflows/{id}/run` or
-/// `GET /api/v1/executions/{id}` body) into a run ref. Accepts the execution
+/// Parse an execution/run object into a run ref. Accepts the execution
 /// at the top level or nested under `data`.
+///
+/// NOTE: This parser was originally used for the `POST /api/v1/workflows/{id}/run`
+/// endpoint, which n8n v2.26 returns 405 for. It is retained for parsing
+/// individual execution responses and is covered by unit tests. The
+/// `ReqwestN8nClient::run_workflow` now uses `parse_latest_execution` instead.
+#[allow(dead_code)]
 pub(crate) fn parse_run(body: &str) -> Result<N8nRunRef> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| ArgosError::N8nConnection(format!("invalid run response: {e}")))?;
@@ -96,6 +101,94 @@ pub(crate) fn parse_status(body: &str) -> Result<N8nRunStatus> {
         .map(map_status)
         .ok_or_else(|| ArgosError::N8nConnection("execution response missing `status`".into()))?;
     Ok(status)
+}
+
+/// Extract the webhook path from a workflow definition's nodes array.
+///
+/// n8n workflows with a `n8n-nodes-base.webhook` node expose an HTTP endpoint
+/// at `{endpoint}/webhook/{path}`. This function finds the first webhook node
+/// and returns its `parameters.path` value. Returns `None` if the workflow
+/// has no webhook node (it cannot be triggered externally via HTTP).
+pub(crate) fn extract_webhook_path(wf: &Value) -> Option<String> {
+    let nodes = wf.get("nodes")?.as_array()?;
+    for node in nodes {
+        let node_type = node.get("type")?.as_str()?;
+        if node_type == "n8n-nodes-base.webhook" {
+            let params = node.get("parameters")?;
+            // The `path` field holds the webhook URL segment.
+            if let Some(path) = params.get("path").and_then(|p| p.as_str()) {
+                return Some(path.to_string());
+            }
+            // Some webhook nodes use `webhookId` as the path fallback.
+            if let Some(wid) = node.get("webhookId").and_then(|w| w.as_str()) {
+                return Some(wid.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Parse the most recent execution for a given workflow from an executions
+/// list response (`GET /api/v1/executions?workflowId={id}`).
+///
+/// n8n returns executions in reverse chronological order (newest first). This
+/// function finds the first execution matching `workflow_id` and returns it
+/// as an `N8nRunRef`.
+pub(crate) fn parse_latest_execution(body: &str, workflow_id: &str) -> Result<N8nRunRef> {
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| ArgosError::N8nConnection(format!("invalid executions response: {e}")))?;
+    let arr = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .or_else(|| v.as_array())
+        .ok_or_else(|| {
+            ArgosError::N8nConnection("executions response missing `data` array".into())
+        })?;
+
+    let exec = arr
+        .iter()
+        .find(|e| {
+            let wf_id = e
+                .get("workflowId")
+                .and_then(|w| w.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    e.get("workflowId")
+                        .and_then(|w| w.as_i64())
+                        .map(|i| i.to_string())
+                })
+                .or_else(|| {
+                    e.get("workflowId")
+                        .and_then(|w| w.as_object())
+                        .and_then(|o| o.get("id"))
+                        .and_then(|id| id.as_str())
+                        .map(|s| s.to_string())
+                });
+            wf_id.map(|w| w == workflow_id).unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            ArgosError::N8nConnection(format!(
+                "no execution found for workflow {workflow_id} after webhook trigger"
+            ))
+        })?;
+
+    let id = value_to_string(
+        exec.get("id")
+            .ok_or_else(|| ArgosError::N8nConnection("execution missing `id`".into()))?,
+    )
+    .ok_or_else(|| ArgosError::N8nConnection("execution `id` is not a string or number".into()))?;
+
+    let status = exec
+        .get("status")
+        .and_then(|s| s.as_str())
+        .map(map_status)
+        .unwrap_or(N8nRunStatus::Running);
+
+    Ok(N8nRunRef {
+        id,
+        workflow_id: workflow_id.to_string(),
+        status,
+    })
 }
 
 /// Coerce a JSON value (string or number) into a `String`.
@@ -137,6 +230,7 @@ fn workflow_from_value(v: &Value) -> Result<N8nWorkflowRef> {
 
 /// Extract the workflow id from a `workflowId` field that may be a string or
 /// an object `{ "id": "...", "name": "..." }`.
+#[allow(dead_code)]
 fn workflow_id_from_value(v: &Value) -> Option<String> {
     if let Some(s) = v.as_str() {
         return Some(s.to_string());
@@ -273,5 +367,103 @@ mod tests {
     #[test]
     fn parse_run_missing_id_errors() {
         assert!(parse_run(r#"{"status":"success","workflowId":"wf-1"}"#).is_err());
+    }
+
+    // --- webhook path extraction ---
+
+    #[test]
+    fn extract_webhook_path_finds_webhook_node() {
+        let wf = serde_json::json!({
+            "nodes": [
+                {"name": "Webhook", "type": "n8n-nodes-base.webhook", "parameters": {"path": "argos-test", "httpMethod": "POST"}},
+                {"name": "NoOp", "type": "n8n-nodes-base.noOp", "parameters": {}}
+            ]
+        });
+        assert_eq!(extract_webhook_path(&wf), Some("argos-test".to_string()));
+    }
+
+    #[test]
+    fn extract_webhook_path_returns_none_without_webhook() {
+        let wf = serde_json::json!({
+            "nodes": [
+                {"name": "Schedule", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}},
+                {"name": "NoOp", "type": "n8n-nodes-base.noOp", "parameters": {}}
+            ]
+        });
+        assert_eq!(extract_webhook_path(&wf), None);
+    }
+
+    #[test]
+    fn extract_webhook_path_returns_none_for_empty_nodes() {
+        let wf = serde_json::json!({"nodes": []});
+        assert_eq!(extract_webhook_path(&wf), None);
+    }
+
+    #[test]
+    fn extract_webhook_path_returns_none_for_missing_nodes() {
+        let wf = serde_json::json!({"name": "No nodes here"});
+        assert_eq!(extract_webhook_path(&wf), None);
+    }
+
+    #[test]
+    fn extract_webhook_path_falls_back_to_webhook_id() {
+        let wf = serde_json::json!({
+            "nodes": [
+                {"name": "Webhook", "type": "n8n-nodes-base.webhook", "parameters": {}, "webhookId": "auto-abc123"}
+            ]
+        });
+        assert_eq!(extract_webhook_path(&wf), Some("auto-abc123".to_string()));
+    }
+
+    // --- latest execution parsing ---
+
+    #[test]
+    fn parse_latest_execution_finds_matching_workflow() {
+        let body = r#"{"data":[
+            {"id":6,"workflowId":"wf-A","status":"success","stoppedAt":"..."},
+            {"id":5,"workflowId":"wf-B","status":"success"},
+            {"id":4,"workflowId":"wf-A","status":"success"}
+        ]}"#;
+        let run = parse_latest_execution(body, "wf-A").unwrap();
+        assert_eq!(run.id, "6");
+        assert_eq!(run.workflow_id, "wf-A");
+        assert_eq!(run.status, N8nRunStatus::Success);
+    }
+
+    #[test]
+    fn parse_latest_execution_finds_first_matching_in_reverse_order() {
+        let body = r#"{"data":[
+            {"id":10,"workflowId":"wf-X","status":"running"},
+            {"id":9,"workflowId":"wf-X","status":"success"}
+        ]}"#;
+        let run = parse_latest_execution(body, "wf-X").unwrap();
+        assert_eq!(run.id, "10");
+        assert_eq!(run.status, N8nRunStatus::Running);
+    }
+
+    #[test]
+    fn parse_latest_execution_errors_when_no_match() {
+        let body = r#"{"data":[{"id":1,"workflowId":"wf-A","status":"success"}]}"#;
+        assert!(parse_latest_execution(body, "wf-Z").is_err());
+    }
+
+    #[test]
+    fn parse_latest_execution_errors_on_empty() {
+        assert!(parse_latest_execution(r#"{"data":[]}"#, "wf-A").is_err());
+    }
+
+    #[test]
+    fn parse_latest_execution_handles_numeric_workflow_id() {
+        let body = r#"{"data":[{"id":6,"workflowId":123,"status":"success"}]}"#;
+        let run = parse_latest_execution(body, "123").unwrap();
+        assert_eq!(run.workflow_id, "123");
+    }
+
+    #[test]
+    fn parse_latest_execution_handles_object_workflow_id() {
+        let body =
+            r#"{"data":[{"id":6,"workflowId":{"id":"wf-obj","name":"X"},"status":"success"}]}"#;
+        let run = parse_latest_execution(body, "wf-obj").unwrap();
+        assert_eq!(run.workflow_id, "wf-obj");
     }
 }

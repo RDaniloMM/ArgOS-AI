@@ -74,6 +74,14 @@ impl N8nClient for FailingN8nClient {
         self.fail(empty_run())
     }
 
+    async fn activate_workflow(&self, _id: &str) -> Result<()> {
+        self.fail(())
+    }
+
+    async fn deactivate_workflow(&self, _id: &str) -> Result<()> {
+        self.fail(())
+    }
+
     async fn get_run_status(&self, _run_id: &str) -> Result<N8nRunStatus> {
         self.fail(N8nRunStatus::Failed)
     }
