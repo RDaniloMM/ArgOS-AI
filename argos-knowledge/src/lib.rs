@@ -12,9 +12,11 @@
 //! CRUD operations trivially testable and avoids a tokio dependency here.
 
 pub mod bundle;
+pub mod links;
 pub mod parser;
 pub mod raw;
 
 pub use bundle::BundleStore;
+pub use links::{CrossLinkParser, LinkGraph, RelationManager};
 pub use parser::{OkfParser, OkfWriter};
 pub use raw::RawSourceStore;
