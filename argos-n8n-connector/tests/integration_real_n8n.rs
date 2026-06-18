@@ -105,12 +105,13 @@ async fn real_n8n_create_and_get_workflow() {
 async fn real_n8n_run_workflow() {
     let client = real_client();
 
-    // Create a workflow with a webhook trigger (required for external execution).
-    // Use a unique webhook path per test run to avoid 409 conflicts with
-    // leftover workflows from previous test runs.
+    // Create a workflow with a webhook trigger using "lastNode" response mode.
+    // In this mode, the webhook POST blocks until the workflow completes and
+    // returns the output data — real async/await, no polling needed.
+    // Use a unique webhook path per test run to avoid 409 conflicts.
     let webhook_path = format!("argos-run-{}", std::process::id());
     let def = format!(
-        r#"{{"name":"ArgOS Run Test","nodes":[{{"name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"parameters":{{"httpMethod":"POST","path":"{webhook_path}","responseMode":"onReceived"}},"webhookId":"{webhook_path}"}},{{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{{}}}}],"connections":{{"Webhook":{{"main":[[{{"node":"NoOp","type":"main","index":0}}]]}}}},"settings":{{}}}}"#
+        r#"{{"name":"ArgOS Run Test","nodes":[{{"name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"parameters":{{"httpMethod":"POST","path":"{webhook_path}","responseMode":"lastNode"}},"webhookId":"{webhook_path}"}},{{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{{}}}}],"connections":{{"Webhook":{{"main":[[{{"node":"NoOp","type":"main","index":0}}]]}}}},"settings":{{}}}}"#
     );
     let created = client
         .create_workflow("ArgOS Run Test", &def)

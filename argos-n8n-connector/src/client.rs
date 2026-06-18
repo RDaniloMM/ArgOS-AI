@@ -371,6 +371,17 @@ impl N8nClient for ReqwestN8nClient {
         })?;
 
         // 3. POST to the webhook URL to trigger execution.
+        //
+        // n8n webhooks support two response modes:
+        // - "onReceived": responds immediately with {"message":"Workflow was started"}
+        //   — the workflow runs async and we'd need to poll for the result.
+        // - "lastNode": BLOCKS until the workflow completes, then returns the
+        //   output data from the last node. This is real async/await —
+        //   reqwest's `.send().await` naturally waits for n8n to finish.
+        //
+        // ArgOS-created workflows default to "lastNode" so run_workflow is a
+        // clean await with no polling. If a user's workflow uses "onReceived",
+        // we detect the immediate "started" response and fall back to polling.
         let webhook_url = format!(
             "{}/webhook/{}",
             self.endpoint.as_str().trim_end_matches('/'),
@@ -405,16 +416,29 @@ impl N8nClient for ReqwestN8nClient {
             )));
         }
 
-        // 4. Poll executions with backoff until n8n registers the new run.
+        // 4. Determine whether the workflow completed synchronously.
         //
-        // n8n's webhook responds with {"message":"Workflow was started"} — an
-        // async acknowledgment, NOT the execution result. The execution is
-        // registered in the backend asynchronously, so we poll
-        // /api/v1/executions until a run for this workflow appears.
+        // With "lastNode" mode, the response contains the workflow output
+        // (not a "started" message) — the execution is already done.
+        // With "onReceived" mode, the response is {"message":"Workflow was
+        // started"} — we need to poll until the execution registers.
+        let started_async = resp_text.contains("Workflow was started");
+
+        if !started_async {
+            // lastNode mode — workflow already completed. Query executions
+            // ONCE to get the execution ID (the webhook response itself
+            // doesn't carry it in a standard field).
+            let exec_body = self
+                .get_text(&format!("/api/v1/executions?workflowId={id}"))
+                .await?;
+            return crate::rest::parse_latest_execution(&exec_body, id);
+        }
+
+        // 5. onReceived mode — poll with backoff until the execution registers.
         //
-        // Backoff: start at 50ms, double each retry, up to 10 retries.
-        // Total worst case: 50+100+200+400+800+1600+3200+6400+12800+25600 ≈ 51s.
-        // In practice the first execution is registered within 50-200ms.
+        // This only happens for workflows the user configured with
+        // "onReceived" mode. ArgOS-created workflows use "lastNode" and
+        // never reach this branch.
         let mut delay = std::time::Duration::from_millis(50);
         let max_retries = 10u32;
 
@@ -423,15 +447,9 @@ impl N8nClient for ReqwestN8nClient {
                 .get_text(&format!("/api/v1/executions?workflowId={id}"))
                 .await;
 
-            match exec_body {
-                Ok(body) => {
-                    if let Ok(run) = crate::rest::parse_latest_execution(&body, id) {
-                        // Found the execution — return immediately, no extra wait.
-                        return Ok(run);
-                    }
-                }
-                Err(_) => {
-                    // Transient error (n8n busy, network hiccup) — retry.
+            if let Ok(body) = exec_body {
+                if let Ok(run) = crate::rest::parse_latest_execution(&body, id) {
+                    return Ok(run);
                 }
             }
 
@@ -442,9 +460,9 @@ impl N8nClient for ReqwestN8nClient {
         }
 
         Err(ArgosError::N8nConnection(format!(
-            "webhook triggered successfully but no execution was registered for \
-             workflow {id} after {max_retries} retries — the workflow may have \
-             no active nodes or n8n failed to start the execution"
+            "webhook triggered but no execution registered for workflow {id} \
+             after {max_retries} retries — the workflow may use 'onReceived' \
+             mode and failed to start, or has no active nodes"
         )))
     }
 
