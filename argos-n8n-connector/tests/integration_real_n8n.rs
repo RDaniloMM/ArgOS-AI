@@ -106,9 +106,14 @@ async fn real_n8n_run_workflow() {
     let client = real_client();
 
     // Create a workflow with a webhook trigger (required for external execution).
-    let def = r#"{"name":"ArgOS Run Test","nodes":[{"name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"parameters":{"httpMethod":"POST","path":"argos-run-test","responseMode":"onReceived"},"webhookId":"argos-run-test-001"},{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{}}],"connections":{"Webhook":{"main":[[{"node":"NoOp","type":"main","index":0}]]}},"settings":{}}"#;
+    // Use a unique webhook path per test run to avoid 409 conflicts with
+    // leftover workflows from previous test runs.
+    let webhook_path = format!("argos-run-{}", std::process::id());
+    let def = format!(
+        r#"{{"name":"ArgOS Run Test","nodes":[{{"name":"Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[250,300],"parameters":{{"httpMethod":"POST","path":"{webhook_path}","responseMode":"onReceived"}},"webhookId":"{webhook_path}"}},{{"name":"NoOp","type":"n8n-nodes-base.noOp","typeVersion":1,"position":[450,300],"parameters":{{}}}}],"connections":{{"Webhook":{{"main":[[{{"node":"NoOp","type":"main","index":0}}]]}}}},"settings":{{}}}}"#
+    );
     let created = client
-        .create_workflow("ArgOS Run Test", def)
+        .create_workflow("ArgOS Run Test", &def)
         .await
         .expect("create_workflow should succeed");
     println!("Created workflow: {} (id: {})", created.name, created.id);
@@ -120,10 +125,8 @@ async fn real_n8n_run_workflow() {
         .expect("activate_workflow should succeed");
     println!("Workflow activated");
 
-    // Give n8n a moment to register the webhook.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
     // Run the workflow by triggering its webhook with data.
+    // The connector polls executions with backoff until n8n registers the run.
     let run = client
         .run_workflow(&created.id, Some(r#"{"message":"hello from ArgOS"}"#))
         .await

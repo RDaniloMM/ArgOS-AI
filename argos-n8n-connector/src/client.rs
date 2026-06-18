@@ -405,14 +405,47 @@ impl N8nClient for ReqwestN8nClient {
             )));
         }
 
-        // 4. Wait briefly for n8n to register the execution.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // 4. Poll executions with backoff until n8n registers the new run.
+        //
+        // n8n's webhook responds with {"message":"Workflow was started"} — an
+        // async acknowledgment, NOT the execution result. The execution is
+        // registered in the backend asynchronously, so we poll
+        // /api/v1/executions until a run for this workflow appears.
+        //
+        // Backoff: start at 50ms, double each retry, up to 10 retries.
+        // Total worst case: 50+100+200+400+800+1600+3200+6400+12800+25600 ≈ 51s.
+        // In practice the first execution is registered within 50-200ms.
+        let mut delay = std::time::Duration::from_millis(50);
+        let max_retries = 10u32;
 
-        // 5. Query executions for this workflow to find the latest run.
-        let exec_body = self
-            .get_text(&format!("/api/v1/executions?workflowId={id}"))
-            .await?;
-        crate::rest::parse_latest_execution(&exec_body, id)
+        for attempt in 0..max_retries {
+            let exec_body = self
+                .get_text(&format!("/api/v1/executions?workflowId={id}"))
+                .await;
+
+            match exec_body {
+                Ok(body) => {
+                    if let Ok(run) = crate::rest::parse_latest_execution(&body, id) {
+                        // Found the execution — return immediately, no extra wait.
+                        return Ok(run);
+                    }
+                }
+                Err(_) => {
+                    // Transient error (n8n busy, network hiccup) — retry.
+                }
+            }
+
+            if attempt + 1 < max_retries {
+                tokio::time::sleep(delay).await;
+                delay = delay.saturating_mul(2);
+            }
+        }
+
+        Err(ArgosError::N8nConnection(format!(
+            "webhook triggered successfully but no execution was registered for \
+             workflow {id} after {max_retries} retries — the workflow may have \
+             no active nodes or n8n failed to start the execution"
+        )))
     }
 
     async fn activate_workflow(&self, id: &str) -> Result<()> {
