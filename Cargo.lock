@@ -87,8 +87,10 @@ dependencies = [
  "async-trait",
  "chrono",
  "keyring",
+ "rusqlite",
  "serde",
  "sha2",
+ "tempfile",
  "tokio",
 ]
 

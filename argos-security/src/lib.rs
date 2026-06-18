@@ -5,9 +5,11 @@
 //! audit logging ([`traits::AuditLog`]). These wrap every action. Implementation
 //! lands in later tasks.
 
+pub mod audit;
 pub mod traits;
 pub mod vault;
 
+pub use audit::HashChainAuditLog;
 pub use traits::{
     AuditEntry, AuditFilter, AuditLog, Permission, PermissionGate, PermissionSet, SecretVault,
 };
