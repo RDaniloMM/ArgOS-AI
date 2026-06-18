@@ -4,3 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Bidirectional n8n connector — discover, import, export, execute-by-delegation, run mirroring"
+
+[dependencies]
+argos-core = { path = "../argos-core" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+# UUID generation for stub workflow/run IDs.
+uuid = { workspace = true }
+# Production HTTP backend is feature-gated so the default build + test suite
+# stay network-free and avoid native-TLS/linker risk on Windows GNU. The
+# `N8nClient` trait is the seam; production enables `reqwest-backend`.
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = []
+reqwest-backend = ["reqwest"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }

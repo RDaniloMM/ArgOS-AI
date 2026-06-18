@@ -1,0 +1,312 @@
+//! n8n HTTP transport seam + in-memory stub.
+//!
+//! [`N8nClient`] abstracts the transport to an n8n instance (MCP preferred,
+//! REST fallback) so the connector is unit-testable without a running n8n
+//! server: tests inject [`StubN8nClient`], production (with the
+//! `reqwest-backend` feature) injects [`ReqwestN8nClient`]. Per the
+//! OllamaProvider pattern (T-010), transport quirks stay behind this seam and
+//! never leak through the [`N8nConnector`](crate::connector::N8nConnector) API.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use argos_core::{ArgosError, N8nRunRef, N8nRunStatus, N8nWorkflowRef, Result};
+use async_trait::async_trait;
+use uuid::Uuid;
+
+/// Transport seam to an n8n instance.
+///
+/// All methods are async and return [`argos_core::Result`]. MCP is the
+/// preferred transport; a REST implementation sits behind the same trait as a
+/// fallback. Callers (the connector, importer, exporter, runner) are unaware
+/// of which transport is in use.
+#[async_trait]
+pub trait N8nClient: Send + Sync {
+    /// List every workflow visible to the connector in n8n.
+    async fn list_workflows(&self) -> Result<Vec<N8nWorkflowRef>>;
+    /// Fetch a single workflow by its n8n id.
+    async fn get_workflow(&self, id: &str) -> Result<N8nWorkflowRef>;
+    /// Create a new workflow in n8n from a JSON `definition`.
+    async fn create_workflow(&self, name: &str, definition: &str) -> Result<N8nWorkflowRef>;
+    /// Update an existing workflow's name and JSON `definition`.
+    async fn update_workflow(
+        &self,
+        id: &str,
+        name: &str,
+        definition: &str,
+    ) -> Result<N8nWorkflowRef>;
+    /// Execute a workflow by id, optionally passing input `data` (JSON).
+    async fn run_workflow(&self, id: &str, data: Option<&str>) -> Result<N8nRunRef>;
+    /// Poll the status of a run by its run id.
+    async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus>;
+    /// Verify the n8n instance is reachable.
+    async fn health_check(&self) -> Result<()>;
+}
+
+/// In-memory [`N8nClient`] for tests — no network, no running n8n.
+///
+/// Workflows, definitions, and runs are stored in `Mutex<HashMap>` so the
+/// `&self` trait methods can mutate state. A run always completes with
+/// [`N8nRunStatus::Success`] immediately (the stub owns no execution engine).
+pub struct StubN8nClient {
+    workflows: Mutex<HashMap<String, N8nWorkflowRef>>,
+    definitions: Mutex<HashMap<String, String>>,
+    runs: Mutex<HashMap<String, N8nRunRef>>,
+}
+
+impl StubN8nClient {
+    /// Create an empty stub client.
+    pub fn new() -> Self {
+        Self {
+            workflows: Mutex::new(HashMap::new()),
+            definitions: Mutex::new(HashMap::new()),
+            runs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Create a stub client pre-populated with `workflows` (definitions left
+    /// empty — useful when tests only need the refs).
+    pub fn with_workflows(workflows: Vec<N8nWorkflowRef>) -> Self {
+        let map = workflows.into_iter().map(|w| (w.id.clone(), w)).collect();
+        Self {
+            workflows: Mutex::new(map),
+            definitions: Mutex::new(HashMap::new()),
+            runs: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for StubN8nClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl N8nClient for StubN8nClient {
+    async fn list_workflows(&self) -> Result<Vec<N8nWorkflowRef>> {
+        let workflows = self.workflows.lock().unwrap();
+        Ok(workflows.values().cloned().collect())
+    }
+
+    async fn get_workflow(&self, id: &str) -> Result<N8nWorkflowRef> {
+        let workflows = self.workflows.lock().unwrap();
+        workflows
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ArgosError::NotFound(format!("n8n workflow not found: {id}")))
+    }
+
+    async fn create_workflow(&self, name: &str, definition: &str) -> Result<N8nWorkflowRef> {
+        let id = Uuid::new_v4().to_string();
+        let workflow = N8nWorkflowRef {
+            id: id.clone(),
+            name: name.to_string(),
+            url: None,
+        };
+        self.workflows
+            .lock()
+            .unwrap()
+            .insert(id.clone(), workflow.clone());
+        self.definitions
+            .lock()
+            .unwrap()
+            .insert(id, definition.to_string());
+        Ok(workflow)
+    }
+
+    async fn update_workflow(
+        &self,
+        id: &str,
+        name: &str,
+        definition: &str,
+    ) -> Result<N8nWorkflowRef> {
+        let mut workflows = self.workflows.lock().unwrap();
+        let workflow = workflows
+            .get_mut(id)
+            .ok_or_else(|| ArgosError::NotFound(format!("n8n workflow not found: {id}")))?;
+        workflow.name = name.to_string();
+        let updated = workflow.clone();
+        drop(workflows);
+        self.definitions
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), definition.to_string());
+        Ok(updated)
+    }
+
+    async fn run_workflow(&self, id: &str, _data: Option<&str>) -> Result<N8nRunRef> {
+        // The stub owns no execution engine: every run completes with Success
+        // immediately. n8n owns real execution; this only models the contract.
+        let run_id = Uuid::new_v4().to_string();
+        let run = N8nRunRef {
+            id: run_id.clone(),
+            workflow_id: id.to_string(),
+            status: N8nRunStatus::Success,
+        };
+        self.runs.lock().unwrap().insert(run_id, run.clone());
+        Ok(run)
+    }
+
+    async fn get_run_status(&self, run_id: &str) -> Result<N8nRunStatus> {
+        let runs = self.runs.lock().unwrap();
+        runs.get(run_id)
+            .map(|r| r.status.clone())
+            .ok_or_else(|| ArgosError::NotFound(format!("n8n run not found: {run_id}")))
+    }
+
+    async fn health_check(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+    fn wf(id: &str, name: &str) -> N8nWorkflowRef {
+        N8nWorkflowRef {
+            id: id.into(),
+            name: name.into(),
+            url: Some(Url::parse("http://localhost:5678/workflow/42").unwrap()),
+        }
+    }
+
+    #[test]
+    fn stub_n8n_client_constructs_empty() {
+        let client = StubN8nClient::new();
+        // An empty stub lists no workflows.
+        let workflows = client.workflows.lock().unwrap();
+        assert!(workflows.is_empty(), "new stub must hold no workflows");
+    }
+
+    #[test]
+    fn stub_n8n_client_can_be_pre_populated_with_workflows() {
+        let client = StubN8nClient::with_workflows(vec![wf("1", "One"), wf("2", "Two")]);
+        let workflows = client.workflows.lock().unwrap();
+        assert_eq!(
+            workflows.len(),
+            2,
+            "pre-populated stub must hold both workflows"
+        );
+        assert!(workflows.contains_key("1"));
+        assert!(workflows.contains_key("2"));
+    }
+
+    #[tokio::test]
+    async fn list_workflows_returns_all_stored_workflows() {
+        let client =
+            StubN8nClient::with_workflows(vec![wf("1", "One"), wf("2", "Two"), wf("3", "Three")]);
+        let list = client.list_workflows().await.unwrap();
+        assert_eq!(
+            list.len(),
+            3,
+            "list_workflows must return every stored workflow"
+        );
+        let ids: Vec<&str> = list.iter().map(|w| w.id.as_str()).collect();
+        assert!(ids.contains(&"1"));
+        assert!(ids.contains(&"2"));
+        assert!(ids.contains(&"3"));
+    }
+
+    #[tokio::test]
+    async fn create_workflow_generates_id_and_stores_workflow() {
+        let client = StubN8nClient::new();
+        let created = client
+            .create_workflow("Daily Report", r#"{"nodes":[]}"#)
+            .await
+            .unwrap();
+        assert_eq!(created.name, "Daily Report");
+        assert!(
+            !created.id.is_empty(),
+            "create_workflow must assign a non-empty id"
+        );
+        // The workflow is now retrievable.
+        let fetched = client.get_workflow(&created.id).await.unwrap();
+        assert_eq!(fetched.id, created.id);
+        // And the definition is stored.
+        let defs = client.definitions.lock().unwrap();
+        assert_eq!(
+            defs.get(&created.id).map(String::as_str),
+            Some(r#"{"nodes":[]}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_workflow_returns_existing_workflow() {
+        let client = StubN8nClient::with_workflows(vec![wf("42", "Daily Report")]);
+        let got = client.get_workflow("42").await.unwrap();
+        assert_eq!(got.id, "42");
+        assert_eq!(got.name, "Daily Report");
+    }
+
+    #[tokio::test]
+    async fn get_workflow_on_missing_id_returns_error() {
+        let client = StubN8nClient::new();
+        let res = client.get_workflow("nope").await;
+        assert!(res.is_err(), "get_workflow on a missing id must error");
+    }
+
+    #[tokio::test]
+    async fn update_workflow_modifies_name_and_definition() {
+        let client = StubN8nClient::new();
+        let created = client
+            .create_workflow("Old", r#"{"nodes":[]}"#)
+            .await
+            .unwrap();
+        let updated = client
+            .update_workflow(&created.id, "New Name", r#"{"nodes":["x"]}"#)
+            .await
+            .unwrap();
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.name, "New Name");
+        // The stored definition reflects the update.
+        let defs = client.definitions.lock().unwrap();
+        assert_eq!(
+            defs.get(&created.id).map(String::as_str),
+            Some(r#"{"nodes":["x"]}"#)
+        );
+        // And the stored workflow name reflects the update.
+        let wfs = client.workflows.lock().unwrap();
+        assert_eq!(wfs.get(&created.id).unwrap().name, "New Name");
+    }
+
+    #[tokio::test]
+    async fn run_workflow_creates_run_with_success_status() {
+        let client = StubN8nClient::with_workflows(vec![wf("42", "Daily Report")]);
+        let run = client.run_workflow("42", None).await.unwrap();
+        assert_eq!(run.workflow_id, "42");
+        assert_eq!(
+            run.status,
+            N8nRunStatus::Success,
+            "stub runs complete immediately"
+        );
+        assert!(!run.id.is_empty(), "run must have a non-empty id");
+    }
+
+    #[tokio::test]
+    async fn get_run_status_returns_stored_status() {
+        let client = StubN8nClient::with_workflows(vec![wf("42", "Daily Report")]);
+        let run = client.run_workflow("42", None).await.unwrap();
+        let status = client.get_run_status(&run.id).await.unwrap();
+        assert_eq!(status, N8nRunStatus::Success);
+    }
+
+    #[tokio::test]
+    async fn health_check_returns_ok() {
+        let client = StubN8nClient::new();
+        assert!(client.health_check().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_workflow_accepts_optional_input_data() {
+        let client = StubN8nClient::with_workflows(vec![wf("42", "Daily Report")]);
+        // Passing Some(data) must still succeed (the stub ignores the payload).
+        let run = client
+            .run_workflow("42", Some(r#"{"foo":"bar"}"#))
+            .await
+            .unwrap();
+        assert_eq!(run.status, N8nRunStatus::Success);
+    }
+}
