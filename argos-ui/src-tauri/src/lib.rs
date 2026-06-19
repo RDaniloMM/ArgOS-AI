@@ -16,6 +16,7 @@ const DEFAULT_REUSE_THRESHOLD: f64 = 0.82;
 
 /// A provider preset displayed as a card in the UI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderPreset {
     pub id: String,
     pub name: String,
@@ -27,6 +28,7 @@ pub struct ProviderPreset {
 
 /// User-editable provider state sent from the frontend.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderInput {
     pub preset_id: String,
     pub api_key: String,
@@ -36,6 +38,7 @@ pub struct ProviderInput {
 
 /// Result of a connectivity test.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
     pub connected: bool,
     pub message: String,
@@ -67,13 +70,21 @@ fn api_key_ref(preset_id: &str) -> String {
     format!("provider/{preset_id}/api_key")
 }
 
+fn normalize_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/chat/completions")
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
 fn default_config(input: &ProviderInput) -> Config {
     Config {
         n8n: None,
         provider: ProviderConfig {
             backend: input.preset_id.clone(),
             model: input.model.clone(),
-            endpoint: Some(input.endpoint.clone()).filter(|s| !s.is_empty()),
+            endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
             api_key_ref: Some(api_key_ref(&input.preset_id)),
         },
         embedder: Default::default(),
@@ -119,8 +130,8 @@ async fn save_provider_internal(
 }
 
 async fn test_provider_internal(input: &ProviderInput) -> Result<ProviderStatus, String> {
-    let endpoint =
-        url::Url::parse(&input.endpoint).map_err(|e| format!("invalid endpoint: {e}"))?;
+    let endpoint = url::Url::parse(&normalize_endpoint(&input.endpoint))
+        .map_err(|e| format!("invalid endpoint: {e}"))?;
 
     if input.preset_id == "ollama" {
         let config = OllamaConfig {
@@ -314,6 +325,45 @@ mod tests {
                 "missing preset {expected}"
             );
         }
+    }
+
+    #[test]
+    fn provider_input_deserializes_camel_case_from_frontend() {
+        let json = serde_json::json!({
+            "presetId": "opencode",
+            "apiKey": "sk-test",
+            "endpoint": "https://opencode.ai/zen/go/v1",
+            "model": "deepseek-v4-flash"
+        });
+
+        let input: ProviderInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.preset_id, "opencode");
+        assert_eq!(input.api_key, "sk-test");
+    }
+
+    #[test]
+    fn provider_preset_serializes_camel_case_to_frontend() {
+        let preset = provider_presets()
+            .into_iter()
+            .find(|p| p.id == "opencode")
+            .unwrap();
+        let json = serde_json::to_value(preset).unwrap();
+
+        assert!(json.get("defaultEndpoint").is_some());
+        assert!(json.get("defaultModel").is_some());
+        assert!(json.get("default_endpoint").is_none());
+    }
+
+    #[test]
+    fn normalize_endpoint_accepts_full_chat_completions_url() {
+        assert_eq!(
+            normalize_endpoint("https://opencode.ai/zen/go/v1/chat/completions"),
+            "https://opencode.ai/zen/go/v1"
+        );
+        assert_eq!(
+            normalize_endpoint("https://opencode.ai/zen/go/v1/chat/completions/"),
+            "https://opencode.ai/zen/go/v1"
+        );
     }
 
     #[tokio::test]
