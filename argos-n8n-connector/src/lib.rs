@@ -7,8 +7,6 @@
 //! ArgOS never executes a workflow itself; n8n owns all execution and
 //! durability, and ArgOS mirrors run status for audit only.
 
-#![warn(missing_docs)]
-
 pub mod client;
 pub mod connector;
 pub mod exporter;

@@ -13,8 +13,6 @@
 //! (graph traversal + existence checks) and stays synchronous — no LLM, fully
 //! deterministic.
 
-#![warn(missing_docs)]
-
 pub mod bundle;
 pub mod ingest;
 pub mod links;

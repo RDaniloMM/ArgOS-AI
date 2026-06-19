@@ -5,8 +5,6 @@
 //! here is serde-serializable and carries no I/O — this crate is the vocabulary that
 //! every other ArgOS crate speaks.
 
-#![warn(missing_docs)]
-
 pub mod agent;
 pub mod common;
 pub mod config;

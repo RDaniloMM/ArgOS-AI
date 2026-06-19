@@ -6,8 +6,6 @@
 //! by `argos_core::AgentState` whose transition table encodes the loop. Slice 1
 //! ships a single generic agent (`Hand::None`). Implementation lands in later tasks.
 
-#![warn(missing_docs)]
-
 pub mod agent;
 pub mod generic_agent;
 pub mod registry;

@@ -8,10 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use argos_core::{Config, ProviderConfig};
-use argos_provider::{
-    OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider,
-};
 use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
+use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
 use argos_security::{MemoryVault, SecretVault};
 
 const DEFAULT_REUSE_THRESHOLD: f64 = 0.82;
@@ -55,8 +53,7 @@ fn config_path_from(dir: &Path) -> PathBuf {
 }
 
 fn read_config(path: &Path) -> Result<Config, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read config: {e}"))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("failed to read config: {e}"))?;
     toml::from_str(&text).map_err(|e| format!("failed to parse config: {e}"))
 }
 
@@ -111,8 +108,7 @@ async fn save_provider_internal(
     vault: &mut dyn SecretVault,
     input: &ProviderInput,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir)
-        .map_err(|e| format!("failed to create config dir: {e}"))?;
+    std::fs::create_dir_all(config_dir).map_err(|e| format!("failed to create config dir: {e}"))?;
     let key_ref = api_key_ref(&input.preset_id);
     vault
         .store(&key_ref, &input.api_key)
@@ -304,8 +300,19 @@ mod tests {
         let presets = provider_presets();
         assert_eq!(presets.len(), 7);
         let ids: Vec<String> = presets.iter().map(|p| p.id.clone()).collect();
-        for expected in ["openai", "anthropic", "google", "ollama", "opencode", "deepseek", "custom"] {
-            assert!(ids.contains(&expected.to_string()), "missing preset {expected}");
+        for expected in [
+            "openai",
+            "anthropic",
+            "google",
+            "ollama",
+            "opencode",
+            "deepseek",
+            "custom",
+        ] {
+            assert!(
+                ids.contains(&expected.to_string()),
+                "missing preset {expected}"
+            );
         }
     }
 
@@ -314,13 +321,21 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("openai");
-        save_provider_internal(&dir, &mut vault, &input).await.unwrap();
+        save_provider_internal(&dir, &mut vault, &input)
+            .await
+            .unwrap();
 
         let config = read_config(&config_path_from(&dir)).unwrap();
         assert_eq!(config.provider.backend, "openai");
         assert_eq!(config.provider.model, "test-model");
-        assert_eq!(config.provider.endpoint, Some("https://api.openai.test/v1".into()));
-        assert_eq!(config.provider.api_key_ref, Some("provider/openai/api_key".into()));
+        assert_eq!(
+            config.provider.endpoint,
+            Some("https://api.openai.test/v1".into())
+        );
+        assert_eq!(
+            config.provider.api_key_ref,
+            Some("provider/openai/api_key".into())
+        );
     }
 
     #[tokio::test]
@@ -328,12 +343,11 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("anthropic");
-        save_provider_internal(&dir, &mut vault, &input).await.unwrap();
-
-        let secret = vault
-            .retrieve("provider/anthropic/api_key")
+        save_provider_internal(&dir, &mut vault, &input)
             .await
             .unwrap();
+
+        let secret = vault.retrieve("provider/anthropic/api_key").await.unwrap();
         assert_eq!(secret, "anthropic-key");
     }
 
@@ -342,7 +356,9 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("deepseek");
-        save_provider_internal(&dir, &mut vault, &input).await.unwrap();
+        save_provider_internal(&dir, &mut vault, &input)
+            .await
+            .unwrap();
 
         let current = get_current_provider_internal(&dir, &vault).await.unwrap();
         assert!(current.is_some());
