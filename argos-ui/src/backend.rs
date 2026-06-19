@@ -1,16 +1,16 @@
-//! Tauri v2 desktop backend for ArgOS.
+//! Backend logic for ArgOS desktop UI.
 //!
-//! Exposes commands used by the React frontend to manage provider settings:
-//! listing presets, reading the current provider, saving provider config, and
-//! testing connectivity. Secrets are stored through [`SecretVault`] so raw API
-//! keys never touch `config.toml`.
+//! Provider preset definitions, config persistence, vault integration, and
+//! connectivity testing — all pure Rust, no Tauri dependency.
+//!
+//! Ported from the original Tauri backend (argos-ui/src-tauri/src/lib.rs).
 
 use std::path::{Path, PathBuf};
 
-use argos_core::{Config, ProviderConfig};
+use argos_core::{ArgosError, Config, ProviderConfig};
 use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
 use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
-use argos_security::{MemoryVault, SecretVault};
+use argos_security::SecretVault;
 
 const DEFAULT_REUSE_THRESHOLD: f64 = 0.82;
 
@@ -44,8 +44,7 @@ pub struct ProviderStatus {
     pub message: String,
 }
 
-#[allow(dead_code)]
-fn argos_dir() -> Result<PathBuf, String> {
+pub fn argos_dir() -> Result<PathBuf, String> {
     dirs::home_dir()
         .ok_or_else(|| "could not determine home directory".to_string())
         .map(|h| h.join(".argos"))
@@ -93,86 +92,8 @@ fn default_config(input: &ProviderInput) -> Config {
     }
 }
 
-async fn get_current_provider_internal(
-    config_dir: &Path,
-    vault: &dyn SecretVault,
-) -> Result<Option<ProviderInput>, String> {
-    let path = config_path_from(config_dir);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let config = read_config(&path)?;
-    let api_key = match config.provider.api_key_ref {
-        Some(ref key_ref) => vault.retrieve(key_ref).await.map_err(|e| e.to_string())?,
-        None => String::new(),
-    };
-    Ok(Some(ProviderInput {
-        preset_id: config.provider.backend,
-        api_key,
-        endpoint: config.provider.endpoint.unwrap_or_default(),
-        model: config.provider.model,
-    }))
-}
-
-async fn save_provider_internal(
-    config_dir: &Path,
-    vault: &mut dyn SecretVault,
-    input: &ProviderInput,
-) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| format!("failed to create config dir: {e}"))?;
-    let key_ref = api_key_ref(&input.preset_id);
-    vault
-        .store(&key_ref, &input.api_key)
-        .await
-        .map_err(|e| e.to_string())?;
-    let config = default_config(input);
-    write_config(&config_path_from(config_dir), &config)
-}
-
-async fn test_provider_internal(input: &ProviderInput) -> Result<ProviderStatus, String> {
-    let endpoint = url::Url::parse(&normalize_endpoint(&input.endpoint))
-        .map_err(|e| format!("invalid endpoint: {e}"))?;
-
-    if input.preset_id == "ollama" {
-        let config = OllamaConfig {
-            endpoint,
-            model: input.model.clone(),
-            embed_model: None,
-        };
-        let provider = OllamaProvider::new(config, ReqwestHttpClient::default());
-        match provider.health_check().await {
-            Ok(()) => Ok(ProviderStatus {
-                connected: true,
-                message: "Ollama is reachable".into(),
-            }),
-            Err(e) => Ok(ProviderStatus {
-                connected: false,
-                message: e.to_string(),
-            }),
-        }
-    } else {
-        let config = OpenAICompatibleConfig {
-            endpoint,
-            api_key: input.api_key.clone(),
-            model: input.model.clone(),
-            embed_model: None,
-        };
-        let provider = OpenAICompatibleProvider::new(config);
-        match provider.health_check().await {
-            Ok(()) => Ok(ProviderStatus {
-                connected: true,
-                message: "Provider is reachable".into(),
-            }),
-            Err(e) => Ok(ProviderStatus {
-                connected: false,
-                message: e.to_string(),
-            }),
-        }
-    }
-}
-
 /// Return the seven built-in provider presets.
-fn provider_presets() -> Vec<ProviderPreset> {
+pub fn provider_presets() -> Vec<ProviderPreset> {
     vec![
         ProviderPreset {
             id: "openai".into(),
@@ -233,63 +154,99 @@ fn provider_presets() -> Vec<ProviderPreset> {
     ]
 }
 
-#[cfg(not(test))]
-mod tauri_cmd {
-    use super::*;
-
-    /// Return the seven built-in provider presets.
-    #[tauri::command]
-    pub async fn get_provider_presets() -> Result<Vec<ProviderPreset>, String> {
-        Ok(provider_presets())
+/// Read the currently saved provider, resolving the API key from the vault.
+pub async fn get_current_provider(
+    config_dir: &Path,
+    vault: &dyn SecretVault,
+) -> Result<Option<ProviderInput>, String> {
+    let path = config_path_from(config_dir);
+    if !path.exists() {
+        return Ok(None);
     }
+    let config = read_config(&path)?;
+    let api_key = match config.provider.api_key_ref {
+        Some(ref key_ref) => match vault.retrieve(key_ref).await {
+            Ok(key) => key,
+            Err(ArgosError::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        },
+        None => String::new(),
+    };
+    Ok(Some(ProviderInput {
+        preset_id: config.provider.backend,
+        api_key,
+        endpoint: config.provider.endpoint.unwrap_or_default(),
+        model: config.provider.model,
+    }))
+}
 
-    /// Read the currently saved provider, resolving the API key from the vault.
-    #[tauri::command]
-    pub async fn get_current_provider() -> Result<Option<ProviderInput>, String> {
-        let dir = argos_dir()?;
-        let vault = MemoryVault::new();
-        get_current_provider_internal(&dir, &vault).await
-    }
+/// Save provider config to `.argos/config.toml` and store the API key in the vault.
+pub async fn save_provider(
+    config_dir: &Path,
+    vault: &mut dyn SecretVault,
+    input: &ProviderInput,
+) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir).map_err(|e| format!("failed to create config dir: {e}"))?;
+    let key_ref = api_key_ref(&input.preset_id);
+    vault
+        .store(&key_ref, &input.api_key)
+        .await
+        .map_err(|e| e.to_string())?;
+    let config = default_config(input);
+    write_config(&config_path_from(config_dir), &config)
+}
 
-    /// Save provider config to `.argos/config.toml` and store the API key in the vault.
-    #[tauri::command]
-    pub async fn save_provider(input: ProviderInput) -> Result<(), String> {
-        let dir = argos_dir()?;
-        let mut vault = MemoryVault::new();
-        save_provider_internal(&dir, &mut vault, &input).await
-    }
+/// Test connectivity to the configured provider.
+pub async fn test_provider(input: &ProviderInput) -> Result<ProviderStatus, String> {
+    let endpoint = url::Url::parse(&normalize_endpoint(&input.endpoint))
+        .map_err(|e| format!("invalid endpoint: {e}"))?;
 
-    /// Test connectivity to the configured provider.
-    #[tauri::command]
-    pub async fn test_provider(input: ProviderInput) -> Result<ProviderStatus, String> {
-        test_provider_internal(&input).await
+    if input.preset_id == "ollama" {
+        let config = OllamaConfig {
+            endpoint,
+            model: input.model.clone(),
+            embed_model: None,
+        };
+        let provider = OllamaProvider::new(config, ReqwestHttpClient::default());
+        match provider.health_check().await {
+            Ok(()) => Ok(ProviderStatus {
+                connected: true,
+                message: "Ollama is reachable".into(),
+            }),
+            Err(e) => Ok(ProviderStatus {
+                connected: false,
+                message: e.to_string(),
+            }),
+        }
+    } else {
+        let config = OpenAICompatibleConfig {
+            endpoint,
+            api_key: input.api_key.clone(),
+            model: input.model.clone(),
+            embed_model: None,
+        };
+        let provider = OpenAICompatibleProvider::new(config);
+        match provider.health_check().await {
+            Ok(()) => Ok(ProviderStatus {
+                connected: true,
+                message: "Provider is reachable".into(),
+            }),
+            Err(e) => Ok(ProviderStatus {
+                connected: false,
+                message: e.to_string(),
+            }),
+        }
     }
 }
 
-/// Run the Tauri application.
-#[cfg(not(test))]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![
-            tauri_cmd::get_provider_presets,
-            tauri_cmd::get_current_provider,
-            tauri_cmd::save_provider,
-            tauri_cmd::test_provider,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-/// Run the Tauri application (stub for test compilation).
-#[cfg(test)]
-pub fn run() {
-    unimplemented!("Tauri runtime is not available in unit tests");
-}
+// ---------------------------------------------------------------------------
+// Tests (ported from the original Tauri backend)
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use argos_security::MemoryVault;
 
     fn temp_argos_dir() -> (PathBuf, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
@@ -306,8 +263,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn get_provider_presets_returns_seven() {
+    #[test]
+    fn get_provider_presets_returns_seven() {
         let presets = provider_presets();
         assert_eq!(presets.len(), 7);
         let ids: Vec<String> = presets.iter().map(|p| p.id.clone()).collect();
@@ -328,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_input_deserializes_camel_case_from_frontend() {
+    fn provider_input_deserializes_camel_case() {
         let json = serde_json::json!({
             "presetId": "opencode",
             "apiKey": "sk-test",
@@ -342,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_preset_serializes_camel_case_to_frontend() {
+    fn provider_preset_serializes_camel_case() {
         let preset = provider_presets()
             .into_iter()
             .find(|p| p.id == "opencode")
@@ -371,9 +328,7 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("openai");
-        save_provider_internal(&dir, &mut vault, &input)
-            .await
-            .unwrap();
+        save_provider(&dir, &mut vault, &input).await.unwrap();
 
         let config = read_config(&config_path_from(&dir)).unwrap();
         assert_eq!(config.provider.backend, "openai");
@@ -393,9 +348,7 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("anthropic");
-        save_provider_internal(&dir, &mut vault, &input)
-            .await
-            .unwrap();
+        save_provider(&dir, &mut vault, &input).await.unwrap();
 
         let secret = vault.retrieve("provider/anthropic/api_key").await.unwrap();
         assert_eq!(secret, "anthropic-key");
@@ -406,11 +359,9 @@ mod tests {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
         let input = sample_input("deepseek");
-        save_provider_internal(&dir, &mut vault, &input)
-            .await
-            .unwrap();
+        save_provider(&dir, &mut vault, &input).await.unwrap();
 
-        let current = get_current_provider_internal(&dir, &vault).await.unwrap();
+        let current = get_current_provider(&dir, &vault).await.unwrap();
         assert!(current.is_some());
         let current = current.unwrap();
         assert_eq!(current.preset_id, "deepseek");
@@ -430,7 +381,7 @@ mod tests {
         if input.api_key.is_empty() {
             panic!("set OPENCODE_API_KEY to run this integration test");
         }
-        let status = test_provider_internal(&input).await.unwrap();
+        let status = test_provider(&input).await.unwrap();
         assert!(status.connected, "{}", status.message);
     }
 }

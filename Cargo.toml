@@ -13,7 +13,7 @@ members = [
     "argos-cli",
     "argos-lib",
     "argos-wasm",
-    "argos-ui/src-tauri",
+    "argos-ui",
 ]
 
 [workspace.package]
