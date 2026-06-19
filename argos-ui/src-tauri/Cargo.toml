@@ -1,0 +1,32 @@
+[package]
+name = "argos-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ArgOS desktop UI (Tauri v2 + React)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+dirs = "5"
+toml = { workspace = true }
+argos-core = { path = "../../argos-core" }
+argos-security = { path = "../../argos-security" }
+argos-lib = { path = "../../argos-lib" }
+argos-provider = { path = "../../argos-provider", features = ["reqwest-backend"] }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+# This feature is used for production builds where `tauri build` is run
+custom-protocol = ["tauri/custom-protocol"]
