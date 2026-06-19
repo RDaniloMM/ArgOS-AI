@@ -5,8 +5,8 @@
   "identifier": "com.argos.app",
   "build": {
     "frontendDist": "../dist",
-    "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm install && npm run dev"
+    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm install && pnpm dev"
   },
   "app": {
     "windows": [
