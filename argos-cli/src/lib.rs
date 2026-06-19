@@ -4,6 +4,8 @@
 //! `argos workflow`, `argos ask`. Slice 1 ships stubbed command handlers;
 //! real service wiring is deferred to Phase 2.
 
+#![warn(missing_docs)]
+
 pub mod cli;
 pub mod commands;
 

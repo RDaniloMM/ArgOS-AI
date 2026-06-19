@@ -4,6 +4,8 @@
 //! Slice 1 ships the `WasmRuntime` trait + stub; the real wasmtime backend is
 //! gated behind the `wasm-backend` feature.
 
+#![warn(missing_docs)]
+
 pub mod runtime;
 
 #[cfg(feature = "wasm-backend")]

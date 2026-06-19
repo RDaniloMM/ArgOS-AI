@@ -8,30 +8,39 @@ use thiserror::Error;
 /// Top-level error type returned by every ArgOS subsystem.
 #[derive(Debug, Error)]
 pub enum ArgosError {
+    /// A storage-layer failure (SQLite, file I/O, blob store, vector store).
     #[error("storage error: {0}")]
     Storage(String),
 
+    /// An LLM provider error (network, API key, rate limit, model timeout).
     #[error("provider error: {0}")]
     Provider(String),
 
+    /// An n8n connection error (MCP handshake, REST timeout, unreachable host).
     #[error("n8n connection error: {0}")]
     N8nConnection(String),
 
+    /// A knowledge/Wiki operation error (parse failure, missing bundle, invalid frontmatter).
     #[error("knowledge/wiki error: {0}")]
     Knowledge(String),
 
+    /// A security violation (permission denied, audit hash mismatch, vault access failure).
     #[error("security error: {0}")]
     Security(String),
 
+    /// A configuration error (missing required key, invalid profile, broken toolchain).
     #[error("configuration error: {0}")]
     Config(String),
 
+    /// A resource was not found (concept, workflow, tool, blob).
     #[error("resource not found: {0}")]
     NotFound(String),
 
+    /// A permission-gated operation was attempted without sufficient rights.
     #[error("permission denied: {0}")]
     Permission(String),
 
+    /// A filesystem or network I/O error.
     #[error("I/O error: {0}")]
     Io(String),
 }

@@ -3,13 +3,18 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+/// Top-level CLI entry point for the ArgOS AI Operating System.
+///
+/// Parses one of four subcommands: `wiki`, `n8n`, `workflow`, or `ask`.
 #[derive(Parser)]
 #[command(name = "argos", about = "AI Operating System")]
 pub struct Cli {
+    /// The subcommand to execute.
     #[command(subcommand)]
     pub command: Command,
 }
 
+/// Top-level ArgOS subcommand — dispatches to wiki, n8n, workflow, or ask.
 #[derive(Subcommand)]
 pub enum Command {
     /// Wiki knowledge operations
@@ -34,6 +39,7 @@ pub enum Command {
     },
 }
 
+/// Wiki subcommand actions — ingest, query, or lint OKF knowledge.
 #[derive(Subcommand)]
 pub enum WikiAction {
     /// Ingest a raw source into the wiki
@@ -50,6 +56,7 @@ pub enum WikiAction {
     Lint,
 }
 
+/// n8n subcommand actions — list, import, or run n8n workflows.
 #[derive(Subcommand)]
 pub enum N8nAction {
     /// List n8n workflows
@@ -69,6 +76,7 @@ pub enum N8nAction {
     },
 }
 
+/// Workflow intelligence subcommand actions — recommend reuse or find similar.
 #[derive(Subcommand)]
 pub enum WorkflowAction {
     /// Recommend reuse for an intent

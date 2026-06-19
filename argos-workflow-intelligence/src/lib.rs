@@ -10,6 +10,8 @@
 //! contradicts/supports) are stored and surfaced but NOT blended into similarity
 //! scoring. Phase 2 adds the structure + I/O + relations blend.
 
+#![warn(missing_docs)]
+
 pub mod crosslinks;
 pub mod recommend;
 pub mod reindexer;

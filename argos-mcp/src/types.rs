@@ -15,9 +15,13 @@ use argos_agent::registry::ToolHandler;
 /// negotiated set exposed to each peer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpCapabilities {
+    /// Whether the peer can invoke tools.
     pub tools: bool,
+    /// Whether the peer supports resource listing (deferred).
     pub resources: bool,
+    /// Whether the peer supports prompt templates (deferred).
     pub prompts: bool,
+    /// Whether the peer supports LLM sampling (deferred).
     pub sampling: bool,
 }
 
@@ -35,15 +39,20 @@ impl Default for McpCapabilities {
 /// Server identity sent during `initialize`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerConfig {
+    /// Human-readable server name (e.g. "ArgOS MCP Server").
     pub name: String,
+    /// Semver version string (e.g. "0.1.0").
     pub version: String,
 }
 
 /// Lifecycle state of the MCP server or client connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerState {
+    /// Server is running and accepting connections.
     Started,
+    /// Server has been shut down.
     Stopped,
+    /// Server is running but with reduced capabilities (reason string).
     Degraded(String),
 }
 
@@ -58,9 +67,11 @@ pub enum McpTransportType {
 /// Information needed to discover and connect to an MCP server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerInfo {
+    /// Human-readable server name (e.g. "n8n-mcp").
     pub name: String,
     /// e.g. `"http://localhost:5678/mcp"` or a stdio command
     pub endpoint: String,
+    /// Transport layer used to connect.
     pub transport: McpTransportType,
 }
 
@@ -69,14 +80,18 @@ pub struct McpServerInfo {
 /// Maps a tool name to its async handler. Registered during server setup;
 /// every exposure emits an `McpToolExposed` audit event.
 pub struct McpToolProxy {
+    /// The tool name clients use to invoke it (e.g. "wiki.query").
     pub name: String,
+    /// The async handler that executes the tool.
     pub handler: Box<dyn ToolHandler>,
 }
 
 /// Audit event recorded when a tool is exposed to MCP clients.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpToolExposedEvent {
+    /// Name of the tool that was exposed.
     pub tool_name: String,
+    /// Human-readable description of what the tool does.
     pub description: String,
 }
 

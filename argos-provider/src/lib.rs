@@ -5,6 +5,8 @@
 //! [`provider::Provider`] trait is the single seam that keeps per-provider quirks
 //! out of the agent loop (ADR-005). Implementation lands in later tasks.
 
+#![warn(missing_docs)]
+
 pub mod ollama;
 pub mod openai_compatible;
 pub mod provider;

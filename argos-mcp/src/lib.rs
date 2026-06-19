@@ -11,6 +11,8 @@
 //! Both directions are permission-gated and audited. Slice 1 uses stdio
 //! transport; HTTP/SSE is feature-gated behind `http-transport`.
 
+#![warn(missing_docs)]
+
 pub mod client;
 pub mod client_impl;
 pub mod n8n_adapter;

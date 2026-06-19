@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 /// WASM runtime capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmCapabilities {
+    /// Maximum memory a loaded module may allocate (bytes).
     pub max_memory_bytes: u64,
+    /// Maximum execution time per function call (milliseconds).
     pub max_execution_time_ms: u64,
+    /// Whether WASI (WebAssembly System Interface) is available.
     pub supports_wasi: bool,
 }
 

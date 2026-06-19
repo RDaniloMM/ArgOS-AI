@@ -16,6 +16,8 @@
 //! - **mcp**: MCP bidirectional server/client (McpServer, McpClient)
 //! - **wasm**: WASM extension stub (WasmRuntime)
 
+#![warn(missing_docs)]
+
 // Core domain re-exports
 #[allow(ambiguous_glob_reexports)]
 pub use argos_core::*;

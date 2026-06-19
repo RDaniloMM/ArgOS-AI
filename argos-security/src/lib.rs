@@ -5,6 +5,8 @@
 //! audit logging ([`traits::AuditLog`]). These wrap every action. Implementation
 //! lands in later tasks.
 
+#![warn(missing_docs)]
+
 pub mod audit;
 pub mod permission;
 pub mod traits;

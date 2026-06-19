@@ -6,6 +6,8 @@
 //! backs them with SQLite + sqlite-vec + the filesystem, Team profile with
 //! Postgres + Qdrant + S3. No embedded-specific SQL leaks through the trait seam.
 
+#![warn(missing_docs)]
+
 pub mod blob;
 pub mod sqlite;
 pub mod traits;
