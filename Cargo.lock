@@ -291,10 +291,13 @@ name = "argos-ui"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "argos-agent",
  "argos-core",
  "argos-lib",
+ "argos-n8n-connector",
  "argos-provider",
  "argos-security",
+ "async-trait",
  "dirs",
  "iced",
  "resvg",

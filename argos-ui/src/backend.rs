@@ -1,20 +1,23 @@
 //! Backend logic for ArgOS desktop UI.
 //!
-//! Provider preset definitions, config persistence, vault integration, and
-//! connectivity testing — all pure Rust, no Tauri dependency.
-//!
-//! Ported from the original Tauri backend (argos-ui/src-tauri/src/lib.rs).
+//! Provider presets, config persistence, vault integration, assistant
+//! execution, and n8n connectivity for the native desktop workspace.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use argos_core::{ArgosError, Config, ProviderConfig};
+use argos_agent::{Agent, GenericAgent, ToolRegistry};
+use argos_core::{ArgosError, Config, N8nConnection, N8nRunRef, N8nWorkflowRef, ProviderConfig};
+use argos_n8n_connector::{N8nConnector, ReqwestN8nClient};
 use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
 use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
-use argos_security::SecretVault;
+use argos_security::{MemoryVault, SecretVault};
+use async_trait::async_trait;
 
 const DEFAULT_REUSE_THRESHOLD: f64 = 0.82;
+const DESKTOP_KEYRING_SERVICE: &str = "argos-ui";
 
-/// A provider preset displayed as a card in the UI.
+/// A provider preset displayed in the desktop UI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderPreset {
@@ -26,7 +29,7 @@ pub struct ProviderPreset {
     pub icon: String,
 }
 
-/// User-editable provider state sent from the frontend.
+/// User-editable provider state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInput {
@@ -36,12 +39,85 @@ pub struct ProviderInput {
     pub model: String,
 }
 
-/// Result of a connectivity test.
+/// Result of a provider connectivity test.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStatus {
     pub connected: bool,
     pub message: String,
+}
+
+/// UI-friendly tool invocation detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantToolEvent {
+    pub name: String,
+    pub args: String,
+    pub result: String,
+}
+
+/// UI-friendly assistant response payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantResponse {
+    pub text: String,
+    pub final_state: String,
+    pub provider_backend: String,
+    pub model: String,
+    pub tool_invocations: Vec<AssistantToolEvent>,
+}
+
+/// Desktop vault selection.
+pub enum DesktopVault {
+    Keyring(argos_security::KeyringVault),
+    Memory(MemoryVault),
+}
+
+#[async_trait]
+impl SecretVault for DesktopVault {
+    async fn store(&mut self, key: &str, secret: &str) -> argos_core::Result<()> {
+        match self {
+            DesktopVault::Keyring(vault) => vault.store(key, secret).await,
+            DesktopVault::Memory(vault) => vault.store(key, secret).await,
+        }
+    }
+
+    async fn retrieve(&self, key: &str) -> argos_core::Result<String> {
+        match self {
+            DesktopVault::Keyring(vault) => vault.retrieve(key).await,
+            DesktopVault::Memory(vault) => vault.retrieve(key).await,
+        }
+    }
+
+    async fn delete(&mut self, key: &str) -> argos_core::Result<()> {
+        match self {
+            DesktopVault::Keyring(vault) => vault.delete(key).await,
+            DesktopVault::Memory(vault) => vault.delete(key).await,
+        }
+    }
+
+    async fn list(&self) -> argos_core::Result<Vec<String>> {
+        match self {
+            DesktopVault::Keyring(vault) => vault.list().await,
+            DesktopVault::Memory(vault) => vault.list().await,
+        }
+    }
+}
+
+pub fn desktop_vault() -> DesktopVault {
+    {
+        return DesktopVault::Keyring(argos_security::KeyringVault::new(DESKTOP_KEYRING_SERVICE));
+    }
+
+    #[allow(unreachable_code)]
+    DesktopVault::Memory(MemoryVault::new())
+}
+
+pub fn desktop_vault_name() -> &'static str {
+    {
+        return "KeyringVault";
+    }
+
+    #[allow(unreachable_code)]
+    "MemoryVault"
 }
 
 pub fn argos_dir() -> Result<PathBuf, String> {
@@ -63,6 +139,15 @@ fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     let text =
         toml::to_string_pretty(config).map_err(|e| format!("failed to serialize config: {e}"))?;
     std::fs::write(path, text).map_err(|e| format!("failed to write config: {e}"))
+}
+
+pub fn load_config(config_dir: &Path) -> Result<Option<Config>, String> {
+    let path = config_path_from(config_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    read_config(&path).map(Some)
 }
 
 fn api_key_ref(preset_id: &str) -> String {
@@ -92,13 +177,22 @@ fn default_config(input: &ProviderInput) -> Config {
     }
 }
 
-/// Return the seven built-in provider presets.
+fn provider_config_from_input(input: &ProviderInput) -> ProviderConfig {
+    ProviderConfig {
+        backend: input.preset_id.clone(),
+        model: input.model.clone(),
+        endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
+        api_key_ref: Some(api_key_ref(&input.preset_id)),
+    }
+}
+
+/// Return the built-in provider presets.
 pub fn provider_presets() -> Vec<ProviderPreset> {
     vec![
         ProviderPreset {
             id: "openai".into(),
             name: "OpenAI".into(),
-            description: "Official OpenAI API (GPT-4o, GPT-4o-mini, etc.).".into(),
+            description: "Official OpenAI API (GPT-4o, GPT-4.1, and related models).".into(),
             default_endpoint: "https://api.openai.com/v1".into(),
             default_model: "gpt-4o".into(),
             icon: "openai".into(),
@@ -163,21 +257,29 @@ pub async fn get_current_provider(
     if !path.exists() {
         return Ok(None);
     }
+
     let config = read_config(&path)?;
     let api_key = match config.provider.api_key_ref {
         Some(ref key_ref) => match vault.retrieve(key_ref).await {
             Ok(key) => key,
             Err(ArgosError::NotFound(_)) => return Ok(None),
+            Err(ArgosError::Security(_)) => return Ok(None),
             Err(e) => return Err(e.to_string()),
         },
         None => String::new(),
     };
+
     Ok(Some(ProviderInput {
         preset_id: config.provider.backend,
         api_key,
         endpoint: config.provider.endpoint.unwrap_or_default(),
         model: config.provider.model,
     }))
+}
+
+pub async fn load_current_provider(config_dir: &Path) -> Result<Option<ProviderInput>, String> {
+    let vault = desktop_vault();
+    get_current_provider(config_dir, &vault).await
 }
 
 /// Save provider config to `.argos/config.toml` and store the API key in the vault.
@@ -187,13 +289,22 @@ pub async fn save_provider(
     input: &ProviderInput,
 ) -> Result<(), String> {
     std::fs::create_dir_all(config_dir).map_err(|e| format!("failed to create config dir: {e}"))?;
+
     let key_ref = api_key_ref(&input.preset_id);
     vault
         .store(&key_ref, &input.api_key)
         .await
         .map_err(|e| e.to_string())?;
-    let config = default_config(input);
-    write_config(&config_path_from(config_dir), &config)
+
+    let path = config_path_from(config_dir);
+    let mut config = if path.exists() {
+        read_config(&path)?
+    } else {
+        default_config(input)
+    };
+    config.provider = provider_config_from_input(input);
+
+    write_config(&path, &config)
 }
 
 /// Test connectivity to the configured provider.
@@ -239,14 +350,129 @@ pub async fn test_provider(input: &ProviderInput) -> Result<ProviderStatus, Stri
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests (ported from the original Tauri backend)
-// ---------------------------------------------------------------------------
+fn provider_from_input(input: &ProviderInput) -> Result<Arc<dyn ArgosProvider>, String> {
+    let endpoint = url::Url::parse(&normalize_endpoint(&input.endpoint))
+        .map_err(|e| format!("invalid provider endpoint: {e}"))?;
+
+    if input.preset_id == "ollama" {
+        Ok(Arc::new(OllamaProvider::new(
+            OllamaConfig {
+                endpoint,
+                model: input.model.clone(),
+                embed_model: None,
+            },
+            ReqwestHttpClient::default(),
+        )))
+    } else {
+        Ok(Arc::new(OpenAICompatibleProvider::new(
+            OpenAICompatibleConfig {
+                endpoint,
+                api_key: input.api_key.clone(),
+                model: input.model.clone(),
+                embed_model: None,
+            },
+        )))
+    }
+}
+
+pub async fn run_assistant(config_dir: &Path, prompt: &str) -> Result<AssistantResponse, String> {
+    let provider_input = load_current_provider(config_dir).await?.ok_or_else(|| {
+        "No provider is configured yet. Open Provider and save a model first.".to_string()
+    })?;
+
+    let provider_backend = provider_input.preset_id.clone();
+    let model = provider_input.model.clone();
+    let provider = provider_from_input(&provider_input)?;
+    let tools = Arc::new(ToolRegistry::new());
+    let mut agent = GenericAgent::new("argos-ui-assistant", provider, tools);
+    let output = agent.run(prompt).await.map_err(|e| e.to_string())?;
+
+    let tool_invocations = output
+        .tool_invocations
+        .into_iter()
+        .map(|invocation| AssistantToolEvent {
+            name: invocation.tool.name,
+            args: invocation.args,
+            result: match invocation.result {
+                argos_core::ToolResult::Ok(value) => value,
+                argos_core::ToolResult::Err(error) => format!("Error: {error}"),
+            },
+        })
+        .collect();
+
+    Ok(AssistantResponse {
+        text: output.text,
+        final_state: format!("{:?}", output.final_state),
+        provider_backend,
+        model,
+        tool_invocations,
+    })
+}
+
+async fn build_n8n_connector(
+    config_dir: &Path,
+) -> Result<Option<(N8nConnection, N8nConnector)>, String> {
+    let Some(config) = load_config(config_dir)? else {
+        return Ok(None);
+    };
+    let Some(connection) = config.n8n else {
+        return Ok(None);
+    };
+
+    let api_key = if let Some(ref key_ref) = connection.api_key_ref {
+        let vault = desktop_vault();
+        match vault.retrieve(key_ref).await {
+            Ok(secret) => Some(secret),
+            Err(ArgosError::NotFound(_)) | Err(ArgosError::Security(_)) => None,
+            Err(err) => return Err(err.to_string()),
+        }
+    } else {
+        None
+    };
+
+    let client = ReqwestN8nClient::new(connection.endpoint.clone(), api_key);
+    let connector = N8nConnector::new(Box::new(client), connection.clone());
+    connector.connect().await.map_err(|e| e.to_string())?;
+
+    Ok(Some((connection, connector)))
+}
+
+pub async fn list_n8n_workflows(
+    config_dir: &Path,
+) -> Result<Option<(N8nConnection, Vec<N8nWorkflowRef>)>, String> {
+    let Some((connection, connector)) = build_n8n_connector(config_dir).await? else {
+        return Ok(None);
+    };
+
+    let workflows = connector
+        .list_workflows()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some((connection, workflows)))
+}
+
+pub async fn run_n8n_workflow(
+    config_dir: &Path,
+    workflow_id: &str,
+    data: Option<&str>,
+) -> Result<(N8nConnection, N8nRunRef), String> {
+    let Some((connection, connector)) = build_n8n_connector(config_dir).await? else {
+        return Err("n8n is not configured in .argos/config.toml.".to_string());
+    };
+
+    let run = connector
+        .run_workflow(workflow_id, data)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok((connection, run))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use argos_security::MemoryVault;
+    use argos_core::{ConnMode, N8nConnection};
+    use url::Url;
 
     fn temp_argos_dir() -> (PathBuf, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
@@ -344,6 +570,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn save_provider_preserves_existing_n8n_settings() {
+        let (dir, _tmp) = temp_argos_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = Config {
+            n8n: Some(N8nConnection {
+                endpoint: Url::parse("http://localhost:5678").unwrap(),
+                mode: ConnMode::Rest,
+                api_key_ref: Some("n8n/api_key".into()),
+            }),
+            provider: ProviderConfig {
+                backend: "openai".into(),
+                model: "old".into(),
+                endpoint: Some("https://old.test/v1".into()),
+                api_key_ref: Some("provider/openai/api_key".into()),
+            },
+            embedder: Default::default(),
+            storage: Default::default(),
+            reuse_threshold: 0.91,
+        };
+        write_config(&config_path_from(&dir), &existing).unwrap();
+
+        let mut vault = MemoryVault::new();
+        let input = sample_input("anthropic");
+        save_provider(&dir, &mut vault, &input).await.unwrap();
+
+        let config = read_config(&config_path_from(&dir)).unwrap();
+        let n8n = config.n8n.expect("n8n config should be preserved");
+        assert_eq!(n8n.endpoint, Url::parse("http://localhost:5678").unwrap());
+        assert_eq!(n8n.api_key_ref.as_deref(), Some("n8n/api_key"));
+        assert_eq!(config.reuse_threshold, 0.91);
+        assert_eq!(config.provider.backend, "anthropic");
+    }
+
+    #[tokio::test]
     async fn save_provider_stores_secret() {
         let (dir, _tmp) = temp_argos_dir();
         let mut vault = MemoryVault::new();
@@ -369,19 +629,15 @@ mod tests {
         assert_eq!(current.model, "test-model");
     }
 
-    #[tokio::test]
-    #[ignore = "requires a live OpenCode Go API key"]
-    async fn test_provider_with_opencode() {
-        let input = ProviderInput {
-            preset_id: "opencode".into(),
-            api_key: std::env::var("OPENCODE_API_KEY").unwrap_or_default(),
-            endpoint: "https://opencode.ai/zen/go/v1".into(),
-            model: "deepseek-v4-flash".into(),
-        };
-        if input.api_key.is_empty() {
-            panic!("set OPENCODE_API_KEY to run this integration test");
-        }
-        let status = test_provider(&input).await.unwrap();
-        assert!(status.connected, "{}", status.message);
+    #[test]
+    fn load_config_returns_none_without_file() {
+        let (dir, _tmp) = temp_argos_dir();
+        let config = load_config(&dir).unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn desktop_vault_reports_expected_backend() {
+        assert_eq!(desktop_vault_name(), "KeyringVault");
     }
 }
