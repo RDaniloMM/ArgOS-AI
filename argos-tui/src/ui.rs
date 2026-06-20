@@ -9,13 +9,13 @@ use crate::commands::KNOWN_PROVIDERS;
 use crate::composer::CursorPosition;
 use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES, VERSION};
 
-const BG_BASE: Color = Color::Rgb(15, 15, 20);
-const BG_PANEL: Color = Color::Rgb(45, 45, 55);
-const BG_COMPOSER: Color = Color::Rgb(38, 38, 48);
-const BG_HIGHLIGHT: Color = Color::Rgb(70, 75, 90);
+const BG_BASE: Color = Color::Black;
+const BG_PANEL: Color = Color::DarkGray;
+const BG_COMPOSER: Color = Color::Rgb(60, 64, 72);
+const BG_HIGHLIGHT: Color = Color::Gray;
 const C_ACCENT: Color = Color::Cyan;
-const C_SUBTLE: Color = Color::Rgb(160, 160, 175);
-const C_TITLE: Color = Color::Rgb(190, 195, 210);
+const C_SUBTLE: Color = Color::Gray;
+const C_TITLE: Color = Color::White;
 
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     let layout = Layout::default()
