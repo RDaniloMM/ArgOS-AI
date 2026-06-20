@@ -172,10 +172,7 @@ impl AppServices for RealServices {
 
     async fn delete_secret(&self, key_ref: &str) -> Result<(), String> {
         let mut vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
-        vault
-            .delete(key_ref)
-            .await
-            .map_err(|err| err.to_string())
+        vault.delete(key_ref).await.map_err(|err| err.to_string())
     }
 
     async fn fetch_models(
@@ -245,8 +242,7 @@ fn save_config(config_dir: &Path, config: &Config) -> Result<(), String> {
     let path = config_path_from(config_dir);
     let text = toml::to_string_pretty(config)
         .map_err(|err| format!("failed to serialize config: {err}"))?;
-    std::fs::write(&path, text)
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+    std::fs::write(&path, text).map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
 async fn provider_snapshot(config: &Config) -> ProviderSnapshot {
@@ -351,8 +347,7 @@ async fn build_provider_from_config(
 }
 
 fn provider_endpoint(config: &ProviderConfig, backend: &str) -> Result<Url, String> {
-    let fallback = crate::commands::known_provider(backend)
-        .and_then(|kp| kp.default_endpoint);
+    let fallback = crate::commands::known_provider(backend).and_then(|kp| kp.default_endpoint);
 
     let raw = config
         .endpoint
@@ -391,7 +386,10 @@ fn unsupported_mcp_message(connection: &N8nConnection) -> String {
 async fn retrieve_secret(secret_ref: Option<&str>) -> Result<String, String> {
     let key_ref = secret_ref.ok_or_else(|| "missing api_key_ref in config.".to_string())?;
     let vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
-    vault.retrieve(key_ref).await.map_err(|err| secret_error(key_ref, err))
+    vault
+        .retrieve(key_ref)
+        .await
+        .map_err(|err| secret_error(key_ref, err))
 }
 
 fn secret_error(key_ref: &str, err: ArgosError) -> String {
@@ -417,8 +415,8 @@ fn mode_label(connection: &N8nConnection) -> &'static str {
 }
 
 fn parse_model_list(body: &str) -> Result<Vec<ModelInfo>, String> {
-    let parsed: serde_json::Value = serde_json::from_str(body)
-        .map_err(|e| format!("failed to parse models JSON: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("failed to parse models JSON: {e}"))?;
 
     let models = parsed["data"]
         .as_array()

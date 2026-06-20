@@ -100,9 +100,7 @@ fn parse_vault_command(args: &str) -> Option<ConfigCommand> {
 
 fn split_first_word(input: &str) -> (&str, &str) {
     let trimmed = input.trim_start();
-    let end = trimmed
-        .find(char::is_whitespace)
-        .unwrap_or(trimmed.len());
+    let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
     let word = &trimmed[..end];
     let rest = trimmed[end..].trim_start();
     (word, rest)
@@ -160,7 +158,10 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "gpt-4o",
             "gpt-4o-mini",
         ],
-        pricing: Some(Pricing { input_per_mtok: 2.50, output_per_mtok: 10.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 2.50,
+            output_per_mtok: 10.00,
+        }),
     },
     KnownProvider {
         backend: "openrouter",
@@ -180,7 +181,10 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "meta-llama/llama-4-scout",
             "qwen/qwen-3",
         ],
-        pricing: Some(Pricing { input_per_mtok: 2.00, output_per_mtok: 8.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 2.00,
+            output_per_mtok: 8.00,
+        }),
     },
     KnownProvider {
         backend: "anthropic",
@@ -192,7 +196,10 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "claude-3.5-haiku-20241022",
             "claude-3.5-sonnet-20241022",
         ],
-        pricing: Some(Pricing { input_per_mtok: 3.00, output_per_mtok: 15.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 3.00,
+            output_per_mtok: 15.00,
+        }),
     },
     KnownProvider {
         backend: "groq",
@@ -206,14 +213,20 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "gemma2-9b-it",
             "qwen-2.5-32b",
         ],
-        pricing: Some(Pricing { input_per_mtok: 0.0, output_per_mtok: 0.0 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 0.0,
+            output_per_mtok: 0.0,
+        }),
     },
     KnownProvider {
         backend: "deepseek",
         default_endpoint: Some("https://api.deepseek.com/v1"),
         default_key_ref: Some("provider/deepseek/api_key"),
         models: &["deepseek-v4-pro", "deepseek-v4-flash"],
-        pricing: Some(Pricing { input_per_mtok: 0.27, output_per_mtok: 1.10 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 0.27,
+            output_per_mtok: 1.10,
+        }),
     },
     KnownProvider {
         backend: "opencode",
@@ -231,7 +244,10 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "gemini-2.5-pro",
             "gemini-2.5-flash",
         ],
-        pricing: Some(Pricing { input_per_mtok: 2.00, output_per_mtok: 8.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 2.00,
+            output_per_mtok: 8.00,
+        }),
     },
     KnownProvider {
         backend: "ollama",
@@ -260,14 +276,20 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "gemini-2.0-flash-lite",
             "gemma-3-27b-it",
         ],
-        pricing: Some(Pricing { input_per_mtok: 0.0, output_per_mtok: 0.0 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 0.0,
+            output_per_mtok: 0.0,
+        }),
     },
     KnownProvider {
         backend: "xai",
         default_endpoint: Some("https://api.x.ai/v1"),
         default_key_ref: Some("provider/xai/api_key"),
         models: &["grok-3-beta", "grok-3-mini-beta"],
-        pricing: Some(Pricing { input_per_mtok: 3.00, output_per_mtok: 10.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 3.00,
+            output_per_mtok: 10.00,
+        }),
     },
     KnownProvider {
         backend: "mistral",
@@ -279,14 +301,20 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             "codestral-latest",
             "mistral-small-latest",
         ],
-        pricing: Some(Pricing { input_per_mtok: 2.00, output_per_mtok: 6.00 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 2.00,
+            output_per_mtok: 6.00,
+        }),
     },
     KnownProvider {
         backend: "cerebras",
         default_endpoint: Some("https://api.cerebras.ai/v1"),
         default_key_ref: Some("provider/cerebras/api_key"),
         models: &["llama-3.3-70b", "llama-3.1-8b"],
-        pricing: Some(Pricing { input_per_mtok: 0.60, output_per_mtok: 0.60 }),
+        pricing: Some(Pricing {
+            input_per_mtok: 0.60,
+            output_per_mtok: 0.60,
+        }),
     },
 ];
 
@@ -326,14 +354,20 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/config", "Show current configuration"),
     ("/providers", "List known providers and models"),
     ("/refresh", "Refresh provider and n8n status"),
-    ("/provider <backend> <model>", "Set provider (auto-configures endpoint + key ref)"),
+    (
+        "/provider <backend> <model>",
+        "Set provider (auto-configures endpoint + key ref)",
+    ),
     ("/model <name>", "Change the model"),
     ("/endpoint <url>", "Change the provider endpoint"),
     ("/key-ref <ref>", "Set the API key reference"),
     ("/n8n <url>", "Set the n8n endpoint URL"),
     ("/n8n-mode <rest|mcp>", "Set n8n mode"),
     ("/n8n-key-ref <ref>", "Set the n8n API key reference"),
-    ("/vault set <ref> <secret>", "Store a secret in the OS keyring"),
+    (
+        "/vault set <ref> <secret>",
+        "Store a secret in the OS keyring",
+    ),
     ("/vault remove <ref>", "Remove a secret from keyring"),
     ("/cd <path>", "Change working directory"),
     ("/clearsessions", "Delete all saved session files"),

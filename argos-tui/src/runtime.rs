@@ -114,12 +114,21 @@ fn autosave_session(state: &AppState) {
     let filepath = dir.join(&filename);
 
     let mut content = String::new();
-    content.push_str(&format!("# ArgOS Session — {}\n\n", now.format("%Y-%m-%d %H:%M:%S")));
+    content.push_str(&format!(
+        "# ArgOS Session — {}\n\n",
+        now.format("%Y-%m-%d %H:%M:%S")
+    ));
     if let Some(ref config) = state.current_config {
-        content.push_str(&format!("**Provider:** {} / {}\n", config.provider.backend, config.provider.model));
+        content.push_str(&format!(
+            "**Provider:** {} / {}\n",
+            config.provider.backend, config.provider.model
+        ));
     }
     content.push_str(&format!("**Tokens:** {}\n", state.session_tokens));
-    content.push_str(&format!("**Cost:** ${:.6}\n\n---\n\n## Transcript\n\n", state.session_cost));
+    content.push_str(&format!(
+        "**Cost:** ${:.6}\n\n---\n\n## Transcript\n\n",
+        state.session_cost
+    ));
     for entry in &state.transcript {
         content.push_str(&format!("**{}:** {}\n", entry.speaker, entry.body));
         if let Some(ref meta) = entry.meta {
@@ -175,24 +184,20 @@ fn dispatch_commands(
                         result: services.store_secret(&key_ref, &secret).await,
                     })
                 }
-                Command::DeleteSecret { key_ref } => {
-                    Event::Async(AsyncEvent::SecretDeleted {
-                        key_ref: key_ref.clone(),
-                        result: services.delete_secret(&key_ref).await,
-                    })
-                }
+                Command::DeleteSecret { key_ref } => Event::Async(AsyncEvent::SecretDeleted {
+                    key_ref: key_ref.clone(),
+                    result: services.delete_secret(&key_ref).await,
+                }),
                 Command::FetchModels {
                     backend,
                     endpoint,
                     api_key_ref,
-                } => {
-                    Event::Async(AsyncEvent::ModelsFetched {
-                        backend: backend.clone(),
-                        models: services
-                            .fetch_models(&backend, &endpoint, api_key_ref.as_deref())
-                            .await,
-                    })
-                }
+                } => Event::Async(AsyncEvent::ModelsFetched {
+                    backend: backend.clone(),
+                    models: services
+                        .fetch_models(&backend, &endpoint, api_key_ref.as_deref())
+                        .await,
+                }),
             };
             let _ = tx.send(event);
         });

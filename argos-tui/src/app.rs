@@ -2,7 +2,10 @@ use crate::action::Action;
 use crate::commands::{self, ConfigCommand};
 use crate::event::AsyncEvent;
 use crate::state::{AppState, FlashMessage, FocusPane, PopupColumn, ResourceStatus, StatusLevel};
-use argos_core::{Config, ConnMode, N8nConnection, N8nRunRef, N8nRunStatus, ProviderConfig, ToolInvocation, ToolResult};
+use argos_core::{
+    Config, ConnMode, N8nConnection, N8nRunRef, N8nRunStatus, ProviderConfig, ToolInvocation,
+    ToolResult,
+};
 use serde_json::Value;
 use url::Url;
 
@@ -162,7 +165,11 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                             level: StatusLevel::Error,
                             text: "Agent request cancelled.".into(),
                         });
-                        state.push_transcript("System", "Request cancelled by user.".to_string(), None);
+                        state.push_transcript(
+                            "System",
+                            "Request cancelled by user.".to_string(),
+                            None,
+                        );
                         return Vec::new();
                     }
                 }
@@ -265,7 +272,8 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
         }
         Action::ComposerAutocomplete => {
             if state.focus == FocusPane::Composer {
-                if let Some(completion) = crate::commands::best_completion(&state.composer.to_text())
+                if let Some(completion) =
+                    crate::commands::best_completion(&state.composer.to_text())
                 {
                     state.composer.clear();
                     for ch in completion.chars() {
@@ -306,12 +314,10 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             }
             match popup.column {
                 PopupColumn::Provider => {
-                    popup.selected_provider =
-                        popup.selected_provider.saturating_sub(1);
+                    popup.selected_provider = popup.selected_provider.saturating_sub(1);
                 }
                 PopupColumn::Model => {
-                    popup.selected_model =
-                        popup.selected_model.saturating_sub(1);
+                    popup.selected_model = popup.selected_model.saturating_sub(1);
                 }
             }
         }
@@ -540,8 +546,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         ConfigCommand::ShowConfig => {
             let text = match &state.current_config {
                 Some(config) => format_config(config),
-                None => "No configuration loaded yet. Use /refresh or create .argos/config.toml."
-                    .into(),
+                None => {
+                    "No configuration loaded yet. Use /refresh or create .argos/config.toml.".into()
+                }
             };
             state.push_transcript("ArgOS", text, None);
             state.flash = Some(FlashMessage {
@@ -580,10 +587,7 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
             };
 
             state.current_config = Some(config.clone());
-            let msg = format!(
-                "Provider set to {} / {}{tip}",
-                backend, model
-            );
+            let msg = format!("Provider set to {} / {}{tip}", backend, model);
             state.push_transcript("System", msg.clone(), None);
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Loading,
@@ -681,7 +685,11 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         }
         ConfigCommand::SetEndpoint { url } => {
             let mut config = ensure_config(state);
-            config.provider.endpoint = if url.is_empty() { None } else { Some(url.clone()) };
+            config.provider.endpoint = if url.is_empty() {
+                None
+            } else {
+                Some(url.clone())
+            };
             state.current_config = Some(config.clone());
             let msg = format!("Provider endpoint set to {}. Refreshing status…", url);
             state.push_transcript("System", msg.clone(), None);
@@ -694,7 +702,11 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         }
         ConfigCommand::SetKeyRef { key_ref } => {
             let mut config = ensure_config(state);
-            config.provider.api_key_ref = if key_ref.is_empty() { None } else { Some(key_ref.clone()) };
+            config.provider.api_key_ref = if key_ref.is_empty() {
+                None
+            } else {
+                Some(key_ref.clone())
+            };
             state.current_config = Some(config.clone());
             let msg = format!("API key reference set to `{}`.", key_ref);
             state.push_transcript("System", msg.clone(), None);
@@ -771,7 +783,11 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 mode: ConnMode::Rest,
                 api_key_ref: Some(key_ref.clone()),
             });
-            n8n.api_key_ref = if key_ref.is_empty() { None } else { Some(key_ref.clone()) };
+            n8n.api_key_ref = if key_ref.is_empty() {
+                None
+            } else {
+                Some(key_ref.clone())
+            };
             state.current_config = Some(config.clone());
             let msg = format!("n8n API key reference set to `{}`.", key_ref);
             state.push_transcript("System", msg.clone(), None);
@@ -847,8 +863,7 @@ fn trigger_refresh(state: &mut AppState) {
 }
 
 fn real_cost(backend: &str, _model: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
-    let pricing = commands::known_provider(backend)
-        .and_then(|kp| kp.pricing);
+    let pricing = commands::known_provider(backend).and_then(|kp| kp.pricing);
 
     let Some(p) = pricing else {
         return 0.0;
@@ -858,9 +873,18 @@ fn real_cost(backend: &str, _model: &str, prompt_tokens: u64, completion_tokens:
         + (completion_tokens as f64 / 1_000_000.0) * p.output_per_mtok
 }
 
-fn dynamic_real_cost(state: &AppState, backend: &str, model_id: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
+fn dynamic_real_cost(
+    state: &AppState,
+    backend: &str,
+    model_id: &str,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+) -> f64 {
     if let Some(models) = state.dynamic_models.get(backend) {
-        if let Some(info) = models.iter().find(|m| m.id == model_id || m.id.ends_with(&format!("/{model_id}"))) {
+        if let Some(info) = models
+            .iter()
+            .find(|m| m.id == model_id || m.id.ends_with(&format!("/{model_id}")))
+        {
             if let Some(p) = info.pricing {
                 return (prompt_tokens as f64 / 1_000_000.0) * p.input_per_mtok
                     + (completion_tokens as f64 / 1_000_000.0) * p.output_per_mtok;
@@ -1069,106 +1093,107 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                 }
             }
         }
-        AsyncEvent::ConfigSaved { result } => {
-            match result {
-                Ok(()) => {
+        AsyncEvent::ConfigSaved { result } => match result {
+            Ok(()) => {
+                state.push_activity(
+                    StatusLevel::Success,
+                    "Config saved",
+                    "Configuration written to .argos/config.toml.",
+                );
+            }
+            Err(err) => {
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: format!("Failed to save config: {err}"),
+                });
+                state.push_transcript("System", format!("Config save failed: {err}"), None);
+            }
+        },
+        AsyncEvent::SecretStored { key_ref, result } => match result {
+            Ok(()) => {
+                let msg = format!("Secret `{key_ref}` stored successfully in OS keyring.");
+                state.push_transcript("System", msg.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Success,
+                    text: msg,
+                });
+            }
+            Err(err) => {
+                let msg = format!("Failed to store secret `{key_ref}`: {err}");
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: msg.clone(),
+                });
+                state.push_transcript("System", msg, None);
+            }
+        },
+        AsyncEvent::SecretDeleted { key_ref, result } => match result {
+            Ok(()) => {
+                let msg = format!("Secret `{key_ref}` removed from OS keyring.");
+                state.push_transcript("System", msg.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Success,
+                    text: msg,
+                });
+            }
+            Err(err) => {
+                let msg = format!("Failed to remove secret `{key_ref}`: {err}");
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: msg.clone(),
+                });
+                state.push_transcript("System", msg, None);
+            }
+        },
+        AsyncEvent::ModelsFetched { backend, models } => match models {
+            Ok(list) => {
+                let is_openrouter = backend.eq_ignore_ascii_case("openrouter");
+                if is_openrouter {
+                    let mut grouped: std::collections::HashMap<
+                        String,
+                        Vec<crate::state::ModelInfo>,
+                    > = std::collections::HashMap::new();
+                    for model in &list {
+                        if let Some((provider, _)) = model.id.split_once('/') {
+                            grouped
+                                .entry(provider.to_string())
+                                .or_default()
+                                .push(model.clone());
+                        }
+                    }
+                    grouped.insert(backend.clone(), list.clone());
+                    for (provider, models) in grouped {
+                        state.dynamic_models.insert(provider, models);
+                    }
                     state.push_activity(
                         StatusLevel::Success,
-                        "Config saved",
-                        "Configuration written to .argos/config.toml.",
+                        "Models: OpenRouter",
+                        format!(
+                            "Fetched {} models across {} providers.",
+                            list.len(),
+                            state.dynamic_models.len()
+                        ),
                     );
-                }
-                Err(err) => {
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Error,
-                        text: format!("Failed to save config: {err}"),
-                    });
-                    state.push_transcript("System", format!("Config save failed: {err}"), None);
-                }
-            }
-        }
-        AsyncEvent::SecretStored { key_ref, result } => {
-            match result {
-                Ok(()) => {
-                    let msg = format!("Secret `{key_ref}` stored successfully in OS keyring.");
-                    state.push_transcript("System", msg.clone(), None);
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Success,
-                        text: msg,
-                    });
-                }
-                Err(err) => {
-                    let msg = format!("Failed to store secret `{key_ref}`: {err}");
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Error,
-                        text: msg.clone(),
-                    });
-                    state.push_transcript("System", msg, None);
-                }
-            }
-        }
-        AsyncEvent::SecretDeleted { key_ref, result } => {
-            match result {
-                Ok(()) => {
-                    let msg = format!("Secret `{key_ref}` removed from OS keyring.");
-                    state.push_transcript("System", msg.clone(), None);
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Success,
-                        text: msg,
-                    });
-                }
-                Err(err) => {
-                    let msg = format!("Failed to remove secret `{key_ref}`: {err}");
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Error,
-                        text: msg.clone(),
-                    });
-                    state.push_transcript("System", msg, None);
-                }
-            }
-        }
-        AsyncEvent::ModelsFetched { backend, models } => {
-            match models {
-                Ok(list) => {
-                    let is_openrouter = backend.eq_ignore_ascii_case("openrouter");
-                    if is_openrouter {
-                        let mut grouped: std::collections::HashMap<String, Vec<crate::state::ModelInfo>> =
-                            std::collections::HashMap::new();
-                        for model in &list {
-                            if let Some((provider, _)) = model.id.split_once('/') {
-                                grouped
-                                    .entry(provider.to_string())
-                                    .or_default()
-                                    .push(model.clone());
-                            }
-                        }
-                        grouped.insert(backend.clone(), list.clone());
-                        for (provider, models) in grouped {
-                            state.dynamic_models.insert(provider, models);
-                        }
-                        state.push_activity(
-                            StatusLevel::Success,
-                            "Models: OpenRouter",
-                            format!("Fetched {} models across {} providers.", list.len(), state.dynamic_models.len()),
-                        );
-                    } else {
-                        state.dynamic_models.insert(backend.clone(), list);
-                        state.push_activity(
-                            StatusLevel::Success,
-                            format!("Models: {backend}"),
-                            format!("Fetched {} models.", state.dynamic_models.get(&backend).map_or(0, |v| v.len())),
-                        );
-                    }
-                }
-                Err(err) => {
+                } else {
+                    state.dynamic_models.insert(backend.clone(), list);
                     state.push_activity(
-                        StatusLevel::Error,
+                        StatusLevel::Success,
                         format!("Models: {backend}"),
-                        format!("Fetch failed: {err}"),
+                        format!(
+                            "Fetched {} models.",
+                            state.dynamic_models.get(&backend).map_or(0, |v| v.len())
+                        ),
                     );
                 }
             }
-        }
+            Err(err) => {
+                state.push_activity(
+                    StatusLevel::Error,
+                    format!("Models: {backend}"),
+                    format!("Fetch failed: {err}"),
+                );
+            }
+        },
     }
 
     Vec::new()

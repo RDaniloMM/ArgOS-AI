@@ -306,7 +306,10 @@ impl AppState {
             return String::new();
         };
 
-        let mut parts = vec![format!("{} · {}", config.provider.backend, config.provider.model)];
+        let mut parts = vec![format!(
+            "{} · {}",
+            config.provider.backend, config.provider.model
+        )];
 
         if is_thinking_model(&config.provider.model) {
             parts.push("🧠".into());
