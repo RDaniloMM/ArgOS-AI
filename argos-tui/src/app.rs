@@ -20,7 +20,7 @@ pub enum Command {
         workflow_name: String,
     },
     SaveConfig {
-        config: Config,
+        config: Box<Config>,
     },
     StoreSecret {
         key_ref: String,
@@ -394,7 +394,9 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                     text: msg,
                 });
                 trigger_refresh(state);
-                return vec![Command::SaveConfig { config }];
+                return vec![Command::SaveConfig {
+                    config: Box::new(config),
+                }];
             }
         }
     }
@@ -488,7 +490,9 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
                     text: msg,
                 });
                 trigger_refresh(state);
-                return vec![Command::SaveConfig { config }];
+                return vec![Command::SaveConfig {
+                    config: Box::new(config),
+                }];
             }
         }
         Action::Escape => {
@@ -594,7 +598,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 text: msg,
             });
             trigger_refresh(state);
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::ListProviders => {
             state.push_transcript("ArgOS", commands::providers_list_text(), None);
@@ -681,7 +687,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 text: msg,
             });
             trigger_refresh(state);
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::SetEndpoint { url } => {
             let mut config = ensure_config(state);
@@ -698,7 +706,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 text: msg,
             });
             trigger_refresh(state);
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::SetKeyRef { key_ref } => {
             let mut config = ensure_config(state);
@@ -714,7 +724,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 level: StatusLevel::Success,
                 text: msg,
             });
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::SetN8n { url } => {
             let parsed = match Url::parse(&url) {
@@ -744,7 +756,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 text: msg,
             });
             trigger_refresh(state);
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::SetN8nMode { mode } => {
             let conn_mode = match mode.as_str() {
@@ -774,7 +788,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 level: StatusLevel::Success,
                 text: msg,
             });
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::SetN8nKeyRef { key_ref } => {
             let mut config = ensure_config(state);
@@ -795,7 +811,9 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 level: StatusLevel::Success,
                 text: msg,
             });
-            vec![Command::SaveConfig { config }]
+            vec![Command::SaveConfig {
+                config: Box::new(config),
+            }]
         }
         ConfigCommand::StoreSecret { key_ref, secret } => {
             state.push_transcript(
