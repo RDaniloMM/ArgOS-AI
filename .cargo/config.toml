@@ -1,3 +1,2 @@
 [build]
-# Default target for local dev (Windows GNU). CI overrides via env or uses default.
-# target = "x86_64-pc-windows-gnu"
+target = "x86_64-pc-windows-gnu"
