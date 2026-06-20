@@ -197,11 +197,26 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
         }
         Action::CopySelection => {
             if let Some((start, end)) = state.composer.selection() {
-                let text = composer_selection_text(&state.composer, start, end);
+                let lines = state.composer.lines();
+                let text: String = if start.row == end.row {
+                    lines[start.row]
+                        .chars()
+                        .skip(start.col)
+                        .take(end.col.saturating_sub(start.col))
+                        .collect()
+                } else {
+                    let mut parts: Vec<String> = Vec::new();
+                    parts.push(lines[start.row].chars().skip(start.col).collect());
+                    for row in (start.row + 1)..end.row {
+                        parts.push(lines[row].to_string());
+                    }
+                    parts.push(lines[end.row].chars().take(end.col).collect());
+                    parts.join("\n")
+                };
                 copy_to_clipboard(&text);
                 state.flash = Some(FlashMessage {
                     level: StatusLevel::Success,
-                    text: "Copied selection to clipboard.".into(),
+                    text: "Copied to clipboard.".into(),
                 });
             } else {
                 let text = state.composer.to_text();
@@ -965,6 +980,38 @@ fn format_config(config: &Config) -> String {
     lines.push(format!("  Reuse threshold: {}", config.reuse_threshold));
     lines.push(format!("  Storage profile: {:?}", config.storage));
     lines.join("\n")
+}
+
+fn copy_to_clipboard(text: &str) {
+    let result = if cfg!(target_os = "windows") {
+        std::process::Command::new("clip")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.as_mut().unwrap().write_all(text.as_bytes())
+            })
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.as_mut().unwrap().write_all(text.as_bytes())
+            })
+    } else {
+        std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.as_mut().unwrap().write_all(text.as_bytes())
+            })
+    };
+    if let Err(e) = result {
+        eprintln!("clipboard copy failed: {e}");
+    }
 }
 
 pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
