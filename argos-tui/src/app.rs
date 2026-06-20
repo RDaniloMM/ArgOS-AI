@@ -870,38 +870,6 @@ fn dynamic_real_cost(state: &AppState, backend: &str, model_id: &str, prompt_tok
     real_cost(backend, model_id, prompt_tokens, completion_tokens)
 }
 
-fn save_session_to_file(state: &AppState, filepath: &std::path::Path) -> Result<(), String> {
-    if let Some(parent) = filepath.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create dir: {e}"))?;
-    }
-
-    let mut content = String::new();
-    let now = chrono::Local::now();
-    content.push_str(&format!("# ArgOS Session — {}\n\n", now.format("%Y-%m-%d %H:%M:%S")));
-
-    if let Some(ref config) = state.current_config {
-        content.push_str(&format!(
-            "**Provider:** {} / {}\n",
-            config.provider.backend, config.provider.model
-        ));
-    }
-    content.push_str(&format!("**Tokens:** {}\n", state.session_tokens));
-    content.push_str(&format!("**Cost:** ${:.6}\n\n", state.session_cost));
-    content.push_str("---\n\n## Transcript\n\n");
-
-    for entry in &state.transcript {
-        content.push_str(&format!("**{}:** {}\n", entry.speaker, entry.body));
-        if let Some(ref meta) = entry.meta {
-            content.push_str(&format!("  *{meta}*\n"));
-        }
-        content.push('\n');
-    }
-
-    std::fs::write(filepath, content)
-        .map_err(|e| format!("write file: {e}"))
-}
-
 fn format_config(config: &Config) -> String {
     let mut lines = vec!["Current configuration:".into(), String::new()];
     lines.push(format!(

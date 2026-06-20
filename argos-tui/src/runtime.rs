@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use chrono::Local;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
 use crossterm::execute;
@@ -55,6 +54,7 @@ pub async fn run(options: RunOptions) -> Result<(), Box<dyn Error>> {
 
     let mut has_drawn_once = false;
     loop {
+        state.advance_spinner();
         terminal.draw(|frame| ui::render(frame, &state))?;
 
         if options.smoke_exit && has_drawn_once {

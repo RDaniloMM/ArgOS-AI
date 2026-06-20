@@ -150,6 +150,7 @@ pub struct AppState {
     pub session_cost: f64,
     pub esc_last_press: Option<std::time::Instant>,
     pub cwd: PathBuf,
+    pub spinner_frame: usize,
 }
 
 impl Default for AppState {
@@ -194,6 +195,7 @@ impl AppState {
             session_cost: 0.0,
             esc_last_press: None,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            spinner_frame: 0,
         }
     }
 
@@ -317,7 +319,15 @@ impl AppState {
 
         parts.join("  ")
     }
+
+    pub fn advance_spinner(&mut self) {
+        self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+    }
 }
+
+pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn is_thinking_model(model: &str) -> bool {
     let m = model.to_lowercase();
