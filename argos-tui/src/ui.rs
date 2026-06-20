@@ -9,12 +9,13 @@ use crate::commands::KNOWN_PROVIDERS;
 use crate::composer::CursorPosition;
 use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES, VERSION};
 
-const BG_DARK: Color = Color::Rgb(24, 24, 24);
-const BG_PANEL: Color = Color::Rgb(32, 32, 32);
-const BG_COMPOSER: Color = Color::Rgb(28, 28, 32);
-const BG_HIGHLIGHT: Color = Color::Rgb(40, 44, 52);
+const BG_BASE: Color = Color::Rgb(15, 15, 20);
+const BG_PANEL: Color = Color::Rgb(45, 45, 55);
+const BG_COMPOSER: Color = Color::Rgb(38, 38, 48);
+const BG_HIGHLIGHT: Color = Color::Rgb(70, 75, 90);
 const C_ACCENT: Color = Color::Cyan;
-const C_SUBTLE: Color = Color::Rgb(100, 100, 100);
+const C_SUBTLE: Color = Color::Rgb(160, 160, 175);
+const C_TITLE: Color = Color::Rgb(190, 195, 210);
 
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     let layout = Layout::default()
@@ -72,7 +73,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     ]);
 
     frame.render_widget(
-        Paragraph::new(line).block(Block::default().style(Style::default().bg(BG_DARK))),
+        Paragraph::new(line).block(Block::default().style(Style::default().bg(BG_BASE))),
         area,
     );
 }
@@ -91,6 +92,11 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(area);
+
+    frame.render_widget(
+        Paragraph::new("").block(Block::default().style(Style::default().bg(BG_BASE))),
+        area,
+    );
 
     render_sidebar(frame, columns[0], state);
     render_center(frame, columns[1], state);
@@ -164,9 +170,12 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     );
 
     let is_focused = state.focus == FocusPane::Workflows;
+    let title_color = if is_focused { C_ACCENT } else { C_TITLE };
     let title = vec![Span::styled(
         "Workflows",
-        Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(title_color)
+            .add_modifier(Modifier::BOLD),
     )];
     frame.render_widget(
         Paragraph::new(Line::from(title)).block(
@@ -226,9 +235,12 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .constraints([Constraint::Min(8), Constraint::Length(5)])
         .split(area);
 
+    let tf = state.focus == FocusPane::Transcript;
     let transcript_title = Line::from(vec![Span::styled(
         "Transcript",
-        Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(if tf { C_ACCENT } else { C_TITLE })
+            .add_modifier(Modifier::BOLD),
     )]);
     frame.render_widget(
         Paragraph::new(transcript_title).block(Block::default().style(Style::default().bg(
@@ -276,10 +288,13 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         render_suggestions(frame, area, state);
     }
 
+    let is_cf = state.focus == FocusPane::Composer;
     let composer_title = Line::from(vec![
         Span::styled(
             "Composer",
-            Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(if is_cf { C_ACCENT } else { C_TITLE })
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(composer_status(state), Style::default().fg(C_SUBTLE)),
@@ -329,11 +344,13 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let is_focused = state.focus == FocusPane::Activity;
     let title = Line::from(vec![Span::styled(
         "Activity",
-        Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(if is_focused { C_ACCENT } else { C_TITLE })
+            .add_modifier(Modifier::BOLD),
     )]);
-    let is_focused = state.focus == FocusPane::Activity;
     frame.render_widget(
         Paragraph::new(title).block(Block::default().style(Style::default().bg(if is_focused {
             BG_HIGHLIGHT
@@ -410,9 +427,7 @@ fn transcript_text(state: &AppState) -> Text<'static> {
     for entry in &state.transcript {
         lines.push(Line::from(vec![Span::styled(
             format!("{}:", entry.speaker),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
         )]));
         for body_line in entry.body.lines() {
             lines.push(Line::from(format!("  {body_line}")));
@@ -432,9 +447,7 @@ fn line_with_label(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{label}: "),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
         ),
         Span::raw(value.to_string()),
     ])
