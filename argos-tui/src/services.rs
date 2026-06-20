@@ -10,7 +10,7 @@ use argos_security::{KeyringVault, SecretVault};
 use async_trait::async_trait;
 use url::Url;
 
-use crate::state::{StatusLevel, WorkflowItem};
+use crate::state::{ModelInfo, ModelPricing, StatusLevel, WorkflowItem};
 
 const SHARED_KEYRING_SERVICE: &str = "argos-ui";
 
@@ -36,6 +36,7 @@ pub struct N8nSnapshot {
 pub struct Snapshot {
     pub provider: ProviderSnapshot,
     pub n8n: N8nSnapshot,
+    pub config: Option<Config>,
 }
 
 #[derive(Debug)]
@@ -43,6 +44,8 @@ pub struct PromptResult {
     pub backend: String,
     pub model: String,
     pub output: AgentOutput,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 #[derive(Debug)]
@@ -56,6 +59,15 @@ pub trait AppServices: Send + Sync {
     async fn load_snapshot(&self) -> Result<Snapshot, String>;
     async fn submit_prompt(&self, prompt: String) -> Result<PromptResult, String>;
     async fn run_workflow(&self, workflow_id: String) -> Result<WorkflowRunResult, String>;
+    async fn save_config(&self, config: &Config) -> Result<(), String>;
+    async fn store_secret(&self, key_ref: &str, secret: &str) -> Result<(), String>;
+    async fn delete_secret(&self, key_ref: &str) -> Result<(), String>;
+    async fn fetch_models(
+        &self,
+        backend: &str,
+        endpoint: &str,
+        api_key_ref: Option<&str>,
+    ) -> Result<Vec<crate::state::ModelInfo>, String>;
 }
 
 pub struct RealServices {
@@ -78,7 +90,8 @@ impl RealServices {
 #[async_trait]
 impl AppServices for RealServices {
     async fn load_snapshot(&self) -> Result<Snapshot, String> {
-        let Some(config) = load_config(&self.config_dir)? else {
+        let config = load_config(&self.config_dir)?;
+        let Some(ref config) = config else {
             return Ok(Snapshot {
                 provider: ProviderSnapshot {
                     level: StatusLevel::Missing,
@@ -95,13 +108,18 @@ impl AppServices for RealServices {
                         .into(),
                     workflows: Vec::new(),
                 },
+                config: None,
             });
         };
 
-        let provider = provider_snapshot(&config).await;
-        let n8n = n8n_snapshot(&config).await;
+        let provider = provider_snapshot(config).await;
+        let n8n = n8n_snapshot(config).await;
 
-        Ok(Snapshot { provider, n8n })
+        Ok(Snapshot {
+            provider,
+            n8n,
+            config: Some(config.clone()),
+        })
     }
 
     async fn submit_prompt(&self, prompt: String) -> Result<PromptResult, String> {
@@ -118,6 +136,8 @@ impl AppServices for RealServices {
         Ok(PromptResult {
             backend,
             model,
+            prompt_tokens: output.prompt_tokens,
+            completion_tokens: output.completion_tokens,
             output,
         })
     }
@@ -136,6 +156,62 @@ impl AppServices for RealServices {
             .map_err(|err| err.to_string())?;
 
         Ok(WorkflowRunResult { mode_label, run })
+    }
+
+    async fn save_config(&self, config: &Config) -> Result<(), String> {
+        save_config(&self.config_dir, config)
+    }
+
+    async fn store_secret(&self, key_ref: &str, secret: &str) -> Result<(), String> {
+        let mut vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
+        vault
+            .store(key_ref, secret)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn delete_secret(&self, key_ref: &str) -> Result<(), String> {
+        let mut vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
+        vault
+            .delete(key_ref)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    async fn fetch_models(
+        &self,
+        _backend: &str,
+        endpoint: &str,
+        api_key_ref: Option<&str>,
+    ) -> Result<Vec<ModelInfo>, String> {
+        let url = format!("{}/models", endpoint.trim_end_matches('/'));
+        let client = reqwest::Client::new();
+        let mut req = client.get(&url);
+
+        if let Some(key_ref) = api_key_ref {
+            match retrieve_secret(Some(key_ref)).await {
+                Ok(api_key) => {
+                    req = req.header("Authorization", format!("Bearer {api_key}"));
+                }
+                Err(_) => {}
+            }
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("fetch models failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("models endpoint returned {}", resp.status()));
+        }
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("failed to read models response: {e}"))?;
+
+        parse_model_list(&body)
     }
 }
 
@@ -160,6 +236,17 @@ fn load_config(config_dir: &Path) -> Result<Option<Config>, String> {
     toml::from_str(&text)
         .map(Some)
         .map_err(|err| format!("failed to parse {}: {err}", path.display()))
+}
+
+fn save_config(config_dir: &Path, config: &Config) -> Result<(), String> {
+    let dir = config_dir;
+    std::fs::create_dir_all(dir)
+        .map_err(|err| format!("failed to create config dir {}: {err}", dir.display()))?;
+    let path = config_path_from(config_dir);
+    let text = toml::to_string_pretty(config)
+        .map_err(|err| format!("failed to serialize config: {err}"))?;
+    std::fs::write(&path, text)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
 async fn provider_snapshot(config: &Config) -> ProviderSnapshot {
@@ -264,11 +351,8 @@ async fn build_provider_from_config(
 }
 
 fn provider_endpoint(config: &ProviderConfig, backend: &str) -> Result<Url, String> {
-    let fallback = if backend == "ollama" {
-        Some("http://localhost:11434")
-    } else {
-        None
-    };
+    let fallback = crate::commands::known_provider(backend)
+        .and_then(|kp| kp.default_endpoint);
 
     let raw = config
         .endpoint
@@ -307,16 +391,17 @@ fn unsupported_mcp_message(connection: &N8nConnection) -> String {
 async fn retrieve_secret(secret_ref: Option<&str>) -> Result<String, String> {
     let key_ref = secret_ref.ok_or_else(|| "missing api_key_ref in config.".to_string())?;
     let vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
-    vault.retrieve(key_ref).await.map_err(secret_error)
+    vault.retrieve(key_ref).await.map_err(|err| secret_error(key_ref, err))
 }
 
-fn secret_error(err: ArgosError) -> String {
-    match err {
-        ArgosError::NotFound(_) => format!(
-            "Secret is missing from the shared keyring service `{}`.",
-            SHARED_KEYRING_SERVICE
-        ),
-        other => other.to_string(),
+fn secret_error(key_ref: &str, err: ArgosError) -> String {
+    let msg = err.to_string();
+    if msg.contains("No matching entry") || msg.contains("NoEntry") {
+        format!(
+            "API key `{key_ref}` not found in Windows Credential Manager. Store it with `/vault set {key_ref} <your-key>` in the composer, then `/refresh`."
+        )
+    } else {
+        msg
     }
 }
 
@@ -329,6 +414,44 @@ fn mode_label(connection: &N8nConnection) -> &'static str {
         ConnMode::Mcp => "MCP-configured",
         ConnMode::Rest => "REST",
     }
+}
+
+fn parse_model_list(body: &str) -> Result<Vec<ModelInfo>, String> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("failed to parse models JSON: {e}"))?;
+
+    let models = parsed["data"]
+        .as_array()
+        .or_else(|| parsed["models"].as_array())
+        .ok_or_else(|| "unexpected models response format".to_string())?;
+
+    let names: Vec<ModelInfo> = models
+        .iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?;
+            let pricing = parse_pricing(m);
+            Some(ModelInfo {
+                id: id.to_string(),
+                pricing,
+            })
+        })
+        .collect();
+
+    if names.is_empty() {
+        Err("no models found in response".to_string())
+    } else {
+        Ok(names)
+    }
+}
+
+fn parse_pricing(m: &serde_json::Value) -> Option<ModelPricing> {
+    let p = m.get("pricing")?;
+    let input_str = p.get("prompt")?.as_str()?;
+    let output_str = p.get("completion")?.as_str()?;
+    Some(ModelPricing {
+        input_per_mtok: input_str.parse::<f64>().ok()? * 1_000_000.0,
+        output_per_mtok: output_str.parse::<f64>().ok()? * 1_000_000.0,
+    })
 }
 
 #[cfg(test)]

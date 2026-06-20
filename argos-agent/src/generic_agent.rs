@@ -143,20 +143,23 @@ impl Agent for GenericAgent {
     }
 
     async fn run(&mut self, input: &str) -> Result<AgentOutput> {
-        // Idle → Observing
         self.state = AgentState::Observing;
 
         let system_prompt = self.build_system_prompt();
         let mut conversation = format!("{system_prompt}\n\nUser: {input}");
+        let mut total_prompt_tokens: u64 = 0;
+        let mut total_completion_tokens: u64 = 0;
 
         for iteration in 0..self.max_iterations {
-            // Observing → Thinking
             self.state = AgentState::Thinking;
 
             let completion = self
                 .provider
                 .complete(&conversation, &CompletionOptions::default())
                 .await?;
+
+            total_prompt_tokens += completion.usage.prompt_tokens as u64;
+            total_completion_tokens += completion.usage.completion_tokens as u64;
 
             let action = self.parse_response(&completion.text);
 
@@ -168,6 +171,8 @@ impl Agent for GenericAgent {
                         text: answer,
                         tool_invocations: invocations,
                         final_state: AgentState::Done,
+                        prompt_tokens: total_prompt_tokens,
+                        completion_tokens: total_completion_tokens,
                     });
                 }
                 AgentAction::ToolCall(tool_name, args) => {
@@ -217,6 +222,8 @@ impl Agent for GenericAgent {
                     text: "Agent reached maximum iterations without completing.".to_string(),
                     tool_invocations: invocations,
                     final_state: AgentState::Failed,
+                    prompt_tokens: total_prompt_tokens,
+                    completion_tokens: total_completion_tokens,
                 });
             }
         }

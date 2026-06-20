@@ -5,7 +5,9 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use crate::state::{AppState, FocusPane, StatusLevel};
+use crate::commands::KNOWN_PROVIDERS;
+use crate::composer::CursorPosition;
+use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel};
 
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     let layout = Layout::default()
@@ -56,6 +58,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 StatusLevel::Loading
             },
         ),
+        Span::raw("  "),
+        Span::styled(
+            format!(" {}", state.cwd.display()),
+            Style::default().fg(Color::DarkGray),
+        ),
     ]);
 
     let block = Block::default().borders(Borders::ALL).title("Session");
@@ -65,39 +72,62 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
+    let constraints: Vec<Constraint> = if state.activity_visible {
+        vec![
             Constraint::Percentage(28),
             Constraint::Percentage(44),
             Constraint::Percentage(28),
-        ])
+        ]
+    } else {
+        vec![Constraint::Percentage(32), Constraint::Percentage(68)]
+    };
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
         .split(area);
 
     render_sidebar(frame, columns[0], state);
     render_center(frame, columns[1], state);
-    render_activity(frame, columns[2], state);
+
+    if state.activity_visible {
+        render_activity(frame, columns[2], state);
+    }
+
+    if state.provider_popup.visible {
+        render_provider_popup(frame, area, state);
+    }
 
     if let Some(flash) = &state.flash {
-        let width = area.width.min(70);
-        let height = 3;
-        let popup = Rect {
-            x: area.x + area.width.saturating_sub(width) / 2,
-            y: area.y + 1,
+        let width = (flash.text.len() + 4).min(area.width as usize - 2) as u16;
+        let height = 1;
+        let toast = Rect {
+            x: area.x + area.width.saturating_sub(width + 2),
+            y: area.y + area.height.saturating_sub(2),
             width,
             height,
         };
-        frame.render_widget(Clear, popup);
+        let bg = match flash.level {
+            StatusLevel::Success => Color::DarkGray,
+            StatusLevel::Error => Color::Red,
+            StatusLevel::Loading => Color::Yellow,
+            StatusLevel::Missing => Color::Blue,
+        };
+        frame.render_widget(Clear, toast);
         frame.render_widget(
-            Paragraph::new(flash.text.clone())
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(flash.level.label())
-                        .border_style(focus_style(flash.level)),
-                )
-                .wrap(Wrap { trim: true }),
-            popup,
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", flash.level.label()),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    flash.text.clone(),
+                    Style::default().fg(Color::White).bg(Color::DarkGray),
+                ),
+            ])),
+            toast,
         );
     }
 }
@@ -197,30 +227,55 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         chunks[0],
     );
 
+    let has_suggestions = !state.suggestions.is_empty();
+    let composer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if has_suggestions {
+            vec![Constraint::Length(1), Constraint::Length(6)]
+        } else {
+            vec![Constraint::Length(7)]
+        })
+        .split(chunks[1]);
+
+    let (suggestion_area, composer_area) = if has_suggestions {
+        (Some(composer_chunks[0]), composer_chunks[1])
+    } else {
+        (None, composer_chunks[0])
+    };
+
+    if let Some(area) = suggestion_area {
+        render_suggestions(frame, area, state);
+    }
+
     let composer_block = Block::default()
         .borders(Borders::ALL)
         .title("Composer")
+        .title(
+            Line::from(composer_status(state))
+                .alignment(ratatui::layout::Alignment::Right),
+        )
         .border_style(if state.focus == FocusPane::Composer {
             Style::default().fg(Color::Cyan)
         } else {
             Style::default()
         });
-    let inner = composer_block.inner(chunks[1]);
-    frame.render_widget(composer_block, chunks[1]);
+    let inner = composer_block.inner(composer_area);
+    frame.render_widget(composer_block, composer_area);
 
     let visible_height = inner.height.max(1) as usize;
     let all_lines = state.composer.lines();
     let start = all_lines.len().saturating_sub(visible_height);
     let visible_lines = &all_lines[start..];
     let display = if visible_lines.is_empty() {
-        vec![Line::from("Type in the composer, then press F5.")]
+        vec![Line::from("Type in the composer, then press Enter.")]
     } else {
-        visible_lines
-            .iter()
-            .map(|line| Line::from(line.clone()))
-            .collect()
+        composer_lines(visible_lines, start, state.composer.selection())
     };
-    frame.render_widget(Paragraph::new(display), inner);
+    frame.render_widget(
+        Paragraph::new(display)
+            .wrap(Wrap { trim: true }),
+        inner,
+    );
 
     if state.focus == FocusPane::Composer {
         if let Some((cursor_x, cursor_y)) = composer_cursor_position(
@@ -273,11 +328,13 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let text = Line::from(vec![
-        Span::raw(" Tab/Shift+Tab focus  "),
+        Span::raw(" Tab autocomplete  "),
         Span::raw("↑↓ or j/k navigate  "),
-        Span::raw("Enter newline  "),
-        Span::raw("F5 ask  "),
+        Span::raw("Enter ask  "),
+        Span::raw("Shift+Enter newline  "),
+        Span::raw("Shift+Arrows select  "),
         Span::raw("F6 run workflow  "),
+        Span::raw("F7 activity  "),
         Span::raw("r refresh  "),
         Span::raw("PgUp/PgDn scroll  "),
         Span::raw("Esc leave composer  "),
@@ -368,6 +425,10 @@ fn composer_cursor_position(
     Some((x, y))
 }
 
+fn composer_status(state: &AppState) -> String {
+    state.composer_status()
+}
+
 fn display_width_up_to_col(line: &str, col: usize) -> usize {
     line.chars()
         .take(col)
@@ -375,10 +436,180 @@ fn display_width_up_to_col(line: &str, col: usize) -> usize {
         .sum()
 }
 
+fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let popup_width = 70u16;
+    let popup_height = 14u16;
+    let x = area.x + area.width.saturating_sub(popup_width) / 2;
+    let y = area.y + area.height.saturating_sub(popup_height) / 2;
+    let popup_area = Rect {
+        x,
+        y,
+        width: popup_width.min(area.width),
+        height: popup_height.min(area.height),
+    };
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Select Provider  [Ctrl+P]  ← → columns  ↑↓ navigate  Enter select  Esc close")
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    let provider_items: Vec<ListItem> = KNOWN_PROVIDERS
+        .iter()
+        .enumerate()
+        .map(|(i, kp)| {
+            let content = format!(" {}  {:<20}", if i == state.provider_popup.selected_provider && state.provider_popup.column == PopupColumn::Provider { "▶" } else { " " }, kp.backend);
+            ListItem::new(content)
+        })
+        .collect();
+    let mut provider_list = ListState::default();
+    provider_list.select(Some(state.provider_popup.selected_provider));
+    frame.render_stateful_widget(
+        List::new(provider_items)
+            .block(Block::default().borders(Borders::ALL).title("Provider"))
+            .highlight_style(if state.provider_popup.column == PopupColumn::Provider {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+            }),
+        columns[0],
+        &mut provider_list,
+    );
+
+    let model_items: Vec<ListItem> = KNOWN_PROVIDERS
+        .get(state.provider_popup.selected_provider)
+        .map(|kp| {
+            let dynamic = state.dynamic_models.get(kp.backend);
+            let models: Vec<String> = match dynamic {
+                Some(list) if !list.is_empty() => list.iter().map(|m| m.id.clone()).collect(),
+                _ => kp.models.iter().map(|m| m.to_string()).collect(),
+            };
+            models
+                .iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let content = format!(
+                        " {}  {}",
+                        if i == state.provider_popup.selected_model && state.provider_popup.column == PopupColumn::Model { "▶" } else { " " },
+                        m
+                    );
+                    ListItem::new(content)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut model_list = ListState::default();
+    model_list.select(Some(state.provider_popup.selected_model));
+    frame.render_stateful_widget(
+        List::new(model_items)
+            .block(Block::default().borders(Borders::ALL).title("Model"))
+            .highlight_style(if state.provider_popup.column == PopupColumn::Model {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+            }),
+        columns[1],
+        &mut model_list,
+    );
+}
+
+fn render_suggestions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let text: String = state
+        .suggestions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            if i == 0 {
+                format!(" → {s}")
+            } else {
+                format!("  │  {s}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let spans = if text.is_empty() {
+        vec![Span::raw("")]
+    } else {
+        vec![Span::styled(
+            text,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        )]
+    };
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn composer_lines(
+    visible_lines: &[String],
+    start: usize,
+    selection: Option<(CursorPosition, CursorPosition)>,
+) -> Vec<Line<'static>> {
+    visible_lines
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| composer_line(line, start + offset, selection))
+        .collect()
+}
+
+fn composer_line(
+    line: &str,
+    row: usize,
+    selection: Option<(CursorPosition, CursorPosition)>,
+) -> Line<'static> {
+    let Some((start, end)) = selection else {
+        return Line::from(line.to_string());
+    };
+
+    if row < start.row || row > end.row {
+        return Line::from(line.to_string());
+    }
+
+    let line_len = line.chars().count();
+    let selected_start = if row == start.row { start.col } else { 0 }.min(line_len);
+    let selected_end = if row == end.row { end.col } else { line_len }.min(line_len);
+
+    if selected_start >= selected_end {
+        return Line::from(line.to_string());
+    }
+
+    let before = line.chars().take(selected_start).collect::<String>();
+    let selected = line
+        .chars()
+        .skip(selected_start)
+        .take(selected_end - selected_start)
+        .collect::<String>();
+    let after = line.chars().skip(selected_end).collect::<String>();
+
+    Line::from(vec![
+        Span::raw(before),
+        Span::styled(
+            selected,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(after),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{composer_cursor_position, display_width_up_to_col};
+    use super::{composer_cursor_position, composer_line, display_width_up_to_col};
+    use crate::composer::CursorPosition;
     use ratatui::layout::Rect;
+    use ratatui::text::Line;
 
     #[test]
     fn cursor_uses_unicode_display_width() {
@@ -420,5 +651,23 @@ mod tests {
             composer_cursor_position(&lines, 2, 2, 2, rect),
             Some((2, 0))
         );
+    }
+
+    #[test]
+    fn composer_line_highlights_selected_segment() {
+        let line = composer_line(
+            "abcdef",
+            0,
+            Some((
+                CursorPosition { row: 0, col: 2 },
+                CursorPosition { row: 0, col: 4 },
+            )),
+        );
+
+        assert_eq!(line.spans.len(), 3);
+        assert_eq!(line.spans[0].content.as_ref(), "ab");
+        assert_eq!(line.spans[1].content.as_ref(), "cd");
+        assert_eq!(line.spans[2].content.as_ref(), "ef");
+        let _ = Line::from(vec!["ab".into(), "cd".into(), "ef".into()]);
     }
 }

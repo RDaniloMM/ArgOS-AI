@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use chrono::Local;
 use crossterm::cursor::{Hide, Show};
-use crossterm::event::{self, Event as CrosstermEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -61,12 +62,25 @@ pub async fn run(options: RunOptions) -> Result<(), Box<dyn Error>> {
         }
         has_drawn_once = true;
 
-        let Some(event) = rx.recv().await else {
+        let Some(first_event) = rx.recv().await else {
             break;
         };
 
-        let (commands, should_exit) = process_event(&mut state, event);
+        let mut should_exit = false;
+        let mut commands = Vec::new();
+
+        let (first_commands, first_exit) = process_event(&mut state, first_event);
+        commands.extend(first_commands);
+        should_exit = should_exit || first_exit;
+
+        while let Ok(event) = rx.try_recv() {
+            let (more_commands, exit) = process_event(&mut state, event);
+            commands.extend(more_commands);
+            should_exit = should_exit || exit;
+        }
+
         if should_exit {
+            autosave_session(&state);
             break;
         }
 
@@ -86,6 +100,37 @@ fn process_event(state: &mut AppState, event: Event) -> (Vec<Command>, bool) {
     };
 
     (commands, state.should_quit)
+}
+
+fn should_forward_key_event(key: &KeyEvent) -> bool {
+    key.kind == KeyEventKind::Press
+}
+
+fn autosave_session(state: &AppState) {
+    let dir = state.cwd.join(".argos").join("sessions");
+    let _ = std::fs::create_dir_all(&dir);
+    let now = chrono::Local::now();
+    let filename = now.format("%Y-%m-%d-%H%M%S.md").to_string();
+    let filepath = dir.join(&filename);
+
+    let mut content = String::new();
+    content.push_str(&format!("# ArgOS Session — {}\n\n", now.format("%Y-%m-%d %H:%M:%S")));
+    if let Some(ref config) = state.current_config {
+        content.push_str(&format!("**Provider:** {} / {}\n", config.provider.backend, config.provider.model));
+    }
+    content.push_str(&format!("**Tokens:** {}\n", state.session_tokens));
+    content.push_str(&format!("**Cost:** ${:.6}\n\n---\n\n## Transcript\n\n", state.session_cost));
+    for entry in &state.transcript {
+        content.push_str(&format!("**{}:** {}\n", entry.speaker, entry.body));
+        if let Some(ref meta) = entry.meta {
+            content.push_str(&format!("  *{meta}*\n"));
+        }
+        content.push('\n');
+    }
+
+    if let Err(e) = std::fs::write(&filepath, content) {
+        eprintln!("autosave failed: {e}");
+    }
 }
 
 fn dispatch_commands(
@@ -113,6 +158,41 @@ fn dispatch_commands(
                     workflow_name,
                     result: services.run_workflow(workflow_id).await,
                 }),
+                Command::SaveConfig { config } => {
+                    let result = services.save_config(&config).await;
+                    let ok = result.is_ok();
+                    let _ = tx.send(Event::Async(AsyncEvent::ConfigSaved { result }));
+                    if ok {
+                        let _ = tx.send(Event::Async(AsyncEvent::SnapshotLoaded(
+                            services.load_snapshot().await,
+                        )));
+                    }
+                    return;
+                }
+                Command::StoreSecret { key_ref, secret } => {
+                    Event::Async(AsyncEvent::SecretStored {
+                        key_ref: key_ref.clone(),
+                        result: services.store_secret(&key_ref, &secret).await,
+                    })
+                }
+                Command::DeleteSecret { key_ref } => {
+                    Event::Async(AsyncEvent::SecretDeleted {
+                        key_ref: key_ref.clone(),
+                        result: services.delete_secret(&key_ref).await,
+                    })
+                }
+                Command::FetchModels {
+                    backend,
+                    endpoint,
+                    api_key_ref,
+                } => {
+                    Event::Async(AsyncEvent::ModelsFetched {
+                        backend: backend.clone(),
+                        models: services
+                            .fetch_models(&backend, &endpoint, api_key_ref.as_deref())
+                            .await,
+                    })
+                }
             };
             let _ = tx.send(event);
         });
@@ -133,6 +213,9 @@ impl InputThread {
                 match event::poll(Duration::from_millis(100)) {
                     Ok(true) => match event::read() {
                         Ok(CrosstermEvent::Key(key)) => {
+                            if !should_forward_key_event(&key) {
+                                continue;
+                            }
                             if tx.send(Event::Input(key)).is_err() {
                                 break;
                             }
@@ -338,9 +421,12 @@ fn restore_terminal_with_state(state: TerminalCleanupState) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_event, CleanupAction, Event, TerminalCleanupState};
+    use super::{
+        process_event, should_forward_key_event, CleanupAction, Event, TerminalCleanupState,
+    };
     use crate::event::AsyncEvent;
     use crate::state::AppState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[test]
     fn cleanup_plan_matches_completed_terminal_stages() {
@@ -388,5 +474,22 @@ mod tests {
 
         assert!(should_exit);
         assert!(state.should_quit);
+    }
+
+    #[test]
+    fn input_thread_ignores_non_press_key_events() {
+        let press = KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..press
+        };
+
+        assert!(should_forward_key_event(&press));
+        assert!(!should_forward_key_event(&release));
     }
 }

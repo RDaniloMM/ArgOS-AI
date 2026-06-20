@@ -23,6 +23,10 @@ pub struct AgentOutput {
     pub tool_invocations: Vec<ToolInvocation>,
     /// The terminal lifecycle state (`Done` or `Failed`).
     pub final_state: AgentState,
+    /// Cumulative prompt tokens across all LLM calls in this run.
+    pub prompt_tokens: u64,
+    /// Cumulative completion tokens across all LLM calls in this run.
+    pub completion_tokens: u64,
 }
 
 /// The core agent abstraction.
@@ -111,6 +115,8 @@ mod tests {
                 text: format!("done:{input}"),
                 tool_invocations: vec![],
                 final_state: self.state.clone(),
+                prompt_tokens: 0,
+                completion_tokens: 0,
             })
         }
         async fn reset(&mut self) -> argos_core::Result<()> {
@@ -133,6 +139,8 @@ mod tests {
             text: "summary".into(),
             tool_invocations: vec![],
             final_state: AgentState::Done,
+            prompt_tokens: 0,
+            completion_tokens: 0,
         };
         assert_eq!(out.text, "summary");
         assert_eq!(out.final_state, AgentState::Done);

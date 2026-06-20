@@ -1,4 +1,36 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use argos_core::Config;
+
 use crate::composer::ComposerBuffer;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelInfo {
+    pub id: String,
+    pub pricing: Option<ModelPricing>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelPricing {
+    pub input_per_mtok: f64,
+    pub output_per_mtok: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProviderPopupState {
+    pub visible: bool,
+    pub selected_provider: usize,
+    pub selected_model: usize,
+    pub column: PopupColumn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupColumn {
+    #[default]
+    Provider,
+    Model,
+}
 
 const PAGE_SIZE: u16 = 8;
 
@@ -91,7 +123,7 @@ pub struct FlashMessage {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
     pub focus: FocusPane,
     pub provider_status: ResourceStatus,
@@ -109,6 +141,15 @@ pub struct AppState {
     pub is_submitting_prompt: bool,
     pub is_running_workflow: bool,
     pub should_quit: bool,
+    pub current_config: Option<Config>,
+    pub suggestions: Vec<String>,
+    pub provider_popup: ProviderPopupState,
+    pub dynamic_models: HashMap<String, Vec<ModelInfo>>,
+    pub activity_visible: bool,
+    pub session_tokens: u64,
+    pub session_cost: f64,
+    pub esc_last_press: Option<std::time::Instant>,
+    pub cwd: PathBuf,
 }
 
 impl Default for AppState {
@@ -134,24 +175,25 @@ impl AppState {
             vault_name: "KeyringVault".into(),
             workflows: Vec::new(),
             selected_workflow: 0,
-            transcript: vec![TranscriptEntry {
-                speaker: "System".into(),
-                body: "Welcome to ArgOS TUI. Press F5 to ask the agent, F6 to run the selected workflow, and r to refresh live status.".into(),
-                meta: Some("Real provider and n8n operations run asynchronously.".into()),
-            }],
+            transcript: Vec::new(),
             transcript_scroll: 0,
             composer: ComposerBuffer::new(),
-            activity: vec![ActivityEntry {
-                title: "App started".into(),
-                detail: "Refresh to load provider and n8n status.".into(),
-                level: StatusLevel::Loading,
-            }],
+            activity: Vec::new(),
             selected_activity: 0,
             flash: None,
             is_loading_snapshot: false,
             is_submitting_prompt: false,
             is_running_workflow: false,
             should_quit: false,
+            current_config: None,
+            suggestions: Vec::new(),
+            provider_popup: ProviderPopupState::default(),
+            dynamic_models: HashMap::new(),
+            activity_visible: false,
+            session_tokens: 0,
+            session_cost: 0.0,
+            esc_last_press: None,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
     }
 
@@ -246,6 +288,63 @@ impl AppState {
                 1 + entry.body.lines().count() + usize::from(entry.meta.as_ref().is_some())
             })
             .sum()
+    }
+
+    pub fn recompute_suggestions(&mut self) {
+        let text = self.composer.to_text();
+        if text.starts_with('/') {
+            self.suggestions = crate::commands::suggest_commands(&text);
+        } else {
+            self.suggestions.clear();
+        }
+    }
+
+    pub fn composer_status(&self) -> String {
+        let Some(ref config) = self.current_config else {
+            return String::new();
+        };
+
+        let mut parts = vec![format!("{} · {}", config.provider.backend, config.provider.model)];
+
+        if is_thinking_model(&config.provider.model) {
+            parts.push("🧠".into());
+        }
+
+        if self.session_tokens > 0 {
+            parts.push(format_tokens(self.session_tokens));
+            parts.push(format_cost(self.session_cost));
+        }
+
+        parts.join("  ")
+    }
+}
+
+fn is_thinking_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("reasoner")
+        || m.contains("o1")
+        || m.contains("o3")
+        || m.contains("o4")
+        || m.starts_with("claude") && m.contains("thinking")
+}
+
+fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M tk", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k tk", tokens as f64 / 1_000.0)
+    } else {
+        format!("{tokens} tk")
+    }
+}
+
+fn format_cost(cost: f64) -> String {
+    if cost >= 1.0 {
+        format!("${cost:.2}")
+    } else if cost >= 0.01 {
+        format!("${cost:.4}")
+    } else {
+        format!("${cost:.6}")
     }
 }
 

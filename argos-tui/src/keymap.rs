@@ -4,31 +4,59 @@ use crate::action::Action;
 use crate::state::FocusPane;
 
 pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
     match key.code {
-        KeyCode::Tab => Some(Action::FocusNext),
+        KeyCode::Tab => Some(if focus == FocusPane::Composer {
+            Action::ComposerAutocomplete
+        } else {
+            Action::FocusNext
+        }),
         KeyCode::BackTab => Some(Action::FocusPrev),
         KeyCode::Esc => Some(Action::Escape),
         KeyCode::F(5) => Some(Action::SubmitPrompt),
         KeyCode::F(6) => Some(Action::RunSelectedWorkflow),
+        KeyCode::F(7) => Some(Action::ToggleActivity),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
+        KeyCode::Home if focus == FocusPane::Composer && shift => Some(Action::ComposerSelectHome),
+        KeyCode::Home if focus == FocusPane::Composer => Some(Action::ComposerMoveHome),
+        KeyCode::End if focus == FocusPane::Composer && shift => Some(Action::ComposerSelectEnd),
+        KeyCode::End if focus == FocusPane::Composer => Some(Action::ComposerMoveEnd),
         KeyCode::Up => Some(if focus == FocusPane::Composer {
-            Action::ComposerMoveUp
+            if shift {
+                Action::ComposerSelectUp
+            } else {
+                Action::ComposerMoveUp
+            }
         } else {
             Action::MoveUp
         }),
         KeyCode::Down => Some(if focus == FocusPane::Composer {
-            Action::ComposerMoveDown
+            if shift {
+                Action::ComposerSelectDown
+            } else {
+                Action::ComposerMoveDown
+            }
         } else {
             Action::MoveDown
         }),
         KeyCode::Left => Some(if focus == FocusPane::Composer {
-            Action::ComposerMoveLeft
+            if shift {
+                Action::ComposerSelectLeft
+            } else {
+                Action::ComposerMoveLeft
+            }
         } else {
             Action::FocusPrev
         }),
         KeyCode::Right => Some(if focus == FocusPane::Composer {
-            Action::ComposerMoveRight
+            if shift {
+                Action::ComposerSelectRight
+            } else {
+                Action::ComposerMoveRight
+            }
         } else {
             Action::FocusNext
         }),
@@ -36,7 +64,9 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::Char('r') if focus != FocusPane::Composer => Some(Action::Refresh),
         KeyCode::Char('j') if focus != FocusPane::Composer => Some(Action::MoveDown),
         KeyCode::Char('k') if focus != FocusPane::Composer => Some(Action::MoveUp),
-        KeyCode::Enter if focus == FocusPane::Composer => Some(Action::ComposerNewline),
+        KeyCode::Char('p') if ctrl => Some(Action::ShowProviderPopup),
+        KeyCode::Enter if focus == FocusPane::Composer && shift => Some(Action::ComposerNewline),
+        KeyCode::Enter if focus == FocusPane::Composer => Some(Action::SubmitPrompt),
         KeyCode::Backspace if focus == FocusPane::Composer => Some(Action::ComposerBackspace),
         KeyCode::Char(ch) if focus == FocusPane::Composer && is_plain_text(key.modifiers) => {
             Some(Action::ComposerInsert(ch))
@@ -74,9 +104,16 @@ mod tests {
     }
 
     #[test]
-    fn composer_enter_inserts_newline_instead_of_submitting() {
+    fn composer_enter_submits_and_shift_enter_keeps_newline() {
         assert_eq!(
             map_key(key(KeyCode::Enter), FocusPane::Composer),
+            Some(Action::SubmitPrompt)
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+                FocusPane::Composer
+            ),
             Some(Action::ComposerNewline)
         );
     }
@@ -106,6 +143,24 @@ mod tests {
         assert_eq!(
             map_key(key(KeyCode::Char('j')), FocusPane::Workflows),
             Some(Action::MoveDown)
+        );
+    }
+
+    #[test]
+    fn composer_shift_navigation_extends_selection() {
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
+                FocusPane::Composer
+            ),
+            Some(Action::ComposerSelectLeft)
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT),
+                FocusPane::Composer
+            ),
+            Some(Action::ComposerSelectHome)
         );
     }
 }
