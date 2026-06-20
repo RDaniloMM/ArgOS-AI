@@ -150,6 +150,9 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .constraints([Constraint::Length(7), Constraint::Min(5)])
         .split(area);
 
+    fill_area(frame, chunks[0], BG_PANEL);
+    fill_area(frame, chunks[1], BG_PANEL);
+
     let status_lines = vec![
         Line::from(vec![Span::styled(
             "Connections",
@@ -163,9 +166,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         Line::from(state.n8n_status.detail.clone()),
     ];
     frame.render_widget(
-        Paragraph::new(Text::from(status_lines))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().style(Style::default().bg(BG_PANEL))),
+        Paragraph::new(Text::from(status_lines)).wrap(Wrap { trim: true }),
         chunks[0],
     );
 
@@ -177,19 +178,15 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .fg(title_color)
             .add_modifier(Modifier::BOLD),
     )];
-    frame.render_widget(
-        Paragraph::new(Line::from(title)).block(
-            Block::default().style(Style::default().bg(if is_focused {
-                BG_HIGHLIGHT
-            } else {
-                BG_PANEL
-            })),
-        ),
+    fill_area(
+        frame,
         Rect {
             height: 1,
             ..chunks[1]
         },
+        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
     );
+    frame.render_widget(Paragraph::new(Line::from(title)), Rect { height: 1, ..chunks[1] });
 
     let list_area = Rect {
         y: chunks[1].y + 1,
@@ -261,6 +258,7 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         height: chunks[0].height.saturating_sub(1),
         ..chunks[0]
     };
+    fill_area(frame, transcript_body, BG_PANEL);
     frame.render_widget(
         Paragraph::new(transcript_text(state))
             .scroll((state.transcript_scroll, 0))
@@ -328,6 +326,7 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     } else {
         composer_lines(visible_lines, start, state.composer.selection())
     };
+    fill_area(frame, inner, BG_COMPOSER);
     frame.render_widget(Paragraph::new(display).wrap(Wrap { trim: true }), inner);
 
     if is_focused {
@@ -351,14 +350,9 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .fg(if is_focused { C_ACCENT } else { C_TITLE })
             .add_modifier(Modifier::BOLD),
     )]);
-    frame.render_widget(
-        Paragraph::new(title).block(Block::default().style(Style::default().bg(if is_focused {
-            BG_HIGHLIGHT
-        } else {
-            BG_PANEL
-        }))),
-        Rect { height: 1, ..area },
-    );
+    let title_rect = Rect { height: 1, ..area };
+    fill_area(frame, title_rect, if is_focused { BG_HIGHLIGHT } else { BG_PANEL });
+    frame.render_widget(Paragraph::new(title), title_rect);
 
     let inner = Rect {
         y: area.y + 1,
@@ -383,6 +377,7 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if !items.is_empty() {
         list_state.select(Some(state.selected_activity));
     }
+    fill_area(frame, inner, BG_PANEL);
     frame.render_stateful_widget(
         List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::White)),
         inner,
@@ -443,7 +438,12 @@ fn transcript_text(state: &AppState) -> Text<'static> {
     Text::from(lines)
 }
 
-fn line_with_label(label: &str, value: &str) -> Line<'static> {
+fn fill_area(frame: &mut Frame<'_>, area: Rect, color: Color) {
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(color)),
+        area,
+    );
+}
     Line::from(vec![
         Span::styled(
             format!("{label}: "),

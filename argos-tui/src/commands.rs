@@ -341,7 +341,7 @@ pub fn providers_list_text() -> String {
 impl KnownProvider {
     pub fn key_description(&self) -> &str {
         match self.default_key_ref {
-            Some(ref k) => k,
+            Some(k) => k,
             None => "(no API key required)",
         }
     }
