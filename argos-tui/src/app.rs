@@ -9,6 +9,9 @@ use argos_core::{
 use serde_json::Value;
 use url::Url;
 
+const STARTUP_MODELS_BACKEND: &str = "openrouter";
+const STARTUP_MODELS_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     LoadSnapshot,
@@ -36,14 +39,30 @@ pub enum Command {
     },
 }
 
+pub fn startup_commands(state: &mut AppState) -> Vec<Command> {
+    let mut commands = handle_action(state, Action::Refresh);
+    commands.extend(queue_models_fetch(
+        state,
+        STARTUP_MODELS_BACKEND,
+        STARTUP_MODELS_ENDPOINT,
+        None,
+        "Fetching provider models",
+        "Loading OpenRouter model catalog for provider/model pickers.",
+    ));
+    commands
+}
+
 pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
     if state.provider_popup.visible {
         return handle_popup_action(state, action);
     }
+    if state.command_palette.visible {
+        return handle_command_palette_action(state, action);
+    }
 
     match action {
-        Action::FocusNext => state.focus = state.focus.next(),
-        Action::FocusPrev => state.focus = state.focus.prev(),
+        Action::FocusNext => state.focus = next_visible_focus(state, 1),
+        Action::FocusPrev => state.focus = next_visible_focus(state, -1),
         Action::MoveUp => match state.focus {
             FocusPane::Workflows => state.move_workflow_selection(-1),
             FocusPane::Transcript => state.scroll_transcript_lines(-1),
@@ -77,10 +96,10 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             state.provider_status.level = StatusLevel::Loading;
             state.provider_status.detail = "Refreshing provider status…".into();
             state.n8n_status.level = StatusLevel::Loading;
-            state.n8n_status.detail = "Refreshing n8n status…".into();
+            state.n8n_status.detail = "Refreshing optional workflow status…".into();
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Loading,
-                text: "Refreshing provider and n8n status…".into(),
+                text: "Refreshing provider and optional workflow status…".into(),
             });
             state.push_activity(
                 StatusLevel::Loading,
@@ -130,10 +149,18 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 return Vec::new();
             }
             let Some(workflow) = state.selected_workflow().cloned() else {
-                state.flash = Some(FlashMessage {
-                    level: StatusLevel::Error,
-                    text: "No workflow is selected.".into(),
-                });
+                state.flash = None;
+                state.push_transcript(
+                    "System",
+                    "No workflow selected. Configure n8n and pick a workflow before running one."
+                        .to_string(),
+                    None,
+                );
+                state.push_activity(
+                    StatusLevel::Missing,
+                    "No workflow selected",
+                    "Workflow automation is optional until you configure n8n.",
+                );
                 return Vec::new();
             };
 
@@ -191,9 +218,15 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
         }
         Action::ToggleActivity => {
             state.activity_visible = !state.activity_visible;
+            if !state.activity_visible && state.focus == FocusPane::Activity {
+                state.focus = FocusPane::Transcript;
+            }
         }
         Action::ToggleSidebar => {
             state.sidebar_visible = !state.sidebar_visible;
+            if !state.sidebar_visible && state.focus == FocusPane::Workflows {
+                state.focus = FocusPane::Transcript;
+            }
         }
         Action::CopySelection => {
             if let Some((start, end)) = state.composer.selection() {
@@ -341,6 +374,10 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 }];
             }
         }
+        Action::ShowCommandPalette => {
+            state.command_palette.visible = true;
+            state.command_palette.selected = 0;
+        }
         Action::HideProviderPopup => {
             state.provider_popup.visible = false;
         }
@@ -436,6 +473,44 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 }];
             }
         }
+    }
+
+    Vec::new()
+}
+
+fn handle_command_palette_action(state: &mut AppState, action: Action) -> Vec<Command> {
+    let command_count = commands::command_definitions().len();
+    match action {
+        Action::MoveUp | Action::ComposerMoveUp => {
+            state.command_palette.selected = state.command_palette.selected.saturating_sub(1);
+        }
+        Action::MoveDown | Action::ComposerMoveDown => {
+            let max = command_count.saturating_sub(1);
+            state.command_palette.selected = (state.command_palette.selected + 1).min(max);
+        }
+        Action::SubmitPrompt | Action::RunSelectedWorkflow => {
+            let Some(command) = commands::command_definitions().get(state.command_palette.selected)
+            else {
+                state.command_palette.visible = false;
+                return Vec::new();
+            };
+
+            state.composer.clear();
+            for ch in command.insert_text.chars() {
+                state.composer.insert_char(ch);
+            }
+            state.recompute_suggestions();
+            state.focus = FocusPane::Composer;
+            state.command_palette.visible = false;
+            state.flash = Some(FlashMessage {
+                level: StatusLevel::Success,
+                text: format!("Inserted {}.", command.signature),
+            });
+        }
+        Action::Escape | Action::ShowCommandPalette => {
+            state.command_palette.visible = false;
+        }
+        _ => {}
     }
 
     Vec::new()
@@ -540,6 +615,37 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
     Vec::new()
 }
 
+fn next_visible_focus(state: &AppState, direction: isize) -> FocusPane {
+    let panes = [
+        FocusPane::Workflows,
+        FocusPane::Transcript,
+        FocusPane::Composer,
+        FocusPane::Activity,
+    ];
+    let current = panes
+        .iter()
+        .position(|pane| *pane == state.focus)
+        .unwrap_or(1) as isize;
+
+    for step in 1..=panes.len() as isize {
+        let index = (current + direction * step).rem_euclid(panes.len() as isize) as usize;
+        let pane = panes[index];
+        if is_focus_visible(state, pane) {
+            return pane;
+        }
+    }
+
+    FocusPane::Composer
+}
+
+fn is_focus_visible(state: &AppState, pane: FocusPane) -> bool {
+    match pane {
+        FocusPane::Workflows => state.sidebar_visible,
+        FocusPane::Activity => state.activity_visible,
+        FocusPane::Transcript | FocusPane::Composer => true,
+    }
+}
+
 fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command> {
     match cmd {
         ConfigCommand::Help => {
@@ -572,10 +678,10 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
             state.provider_status.level = StatusLevel::Loading;
             state.provider_status.detail = "Refreshing provider status…".into();
             state.n8n_status.level = StatusLevel::Loading;
-            state.n8n_status.detail = "Refreshing n8n status…".into();
+            state.n8n_status.detail = "Refreshing optional workflow status…".into();
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Loading,
-                text: "Refreshing provider and n8n status…".into(),
+                text: "Refreshing provider and optional workflow status…".into(),
             });
             state.push_activity(
                 StatusLevel::Loading,
@@ -898,6 +1004,61 @@ fn maybe_fetch_models(_state: &AppState) -> Vec<Command> {
     Vec::new()
 }
 
+fn queue_models_fetch(
+    state: &mut AppState,
+    backend: &str,
+    endpoint: &str,
+    api_key_ref: Option<String>,
+    title: &str,
+    detail: &str,
+) -> Vec<Command> {
+    if state.dynamic_models.contains_key(backend) {
+        return Vec::new();
+    }
+
+    state.push_activity(StatusLevel::Loading, title, detail);
+    vec![Command::FetchModels {
+        backend: backend.to_string(),
+        endpoint: endpoint.to_string(),
+        api_key_ref,
+    }]
+}
+
+fn current_provider_models_command(state: &mut AppState) -> Vec<Command> {
+    let Some(config) = state.current_config.clone() else {
+        return Vec::new();
+    };
+
+    if state.dynamic_models.contains_key(&config.provider.backend) {
+        return Vec::new();
+    }
+
+    let endpoint = config
+        .provider
+        .endpoint
+        .clone()
+        .or_else(|| {
+            commands::known_provider(&config.provider.backend)
+                .and_then(|provider| provider.default_endpoint)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if endpoint.is_empty() {
+        return Vec::new();
+    }
+
+    let backend = config.provider.backend.clone();
+    let detail = format!("Loading {backend} models from {endpoint}.");
+    queue_models_fetch(
+        state,
+        &backend,
+        &endpoint,
+        config.provider.api_key_ref,
+        "Fetching current provider models",
+        &detail,
+    )
+}
+
 fn get_provider_models(state: &AppState, backend: &str) -> Vec<String> {
     if let Some(dynamic) = state.dynamic_models.get(backend) {
         if !dynamic.is_empty() {
@@ -914,7 +1075,7 @@ fn trigger_refresh(state: &mut AppState) {
     state.provider_status.level = StatusLevel::Loading;
     state.provider_status.detail = "Refreshing provider status…".into();
     state.n8n_status.level = StatusLevel::Loading;
-    state.n8n_status.detail = "Refreshing n8n status…".into();
+    state.n8n_status.detail = "Refreshing optional workflow status…".into();
 }
 
 fn real_cost(backend: &str, _model: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
@@ -1044,6 +1205,7 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                         "Refresh completed",
                         format!("Loaded {} workflows.", state.workflows.len()),
                     );
+                    return current_provider_models_command(state);
                 }
                 Err(err) => {
                     state.provider_status.level = StatusLevel::Error;
@@ -1237,11 +1399,13 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                         Vec<crate::state::ModelInfo>,
                     > = std::collections::HashMap::new();
                     for model in &list {
-                        if let Some((provider, _)) = model.id.split_once('/') {
+                        if let Some((provider, provider_model_id)) = model.id.split_once('/') {
+                            let mut provider_model = model.clone();
+                            provider_model.id = provider_model_id.to_string();
                             grouped
                                 .entry(provider.to_string())
                                 .or_default()
-                                .push(model.clone());
+                                .push(provider_model);
                         }
                     }
                     grouped.insert(backend.clone(), list.clone());
@@ -1384,13 +1548,13 @@ fn detail_with_metadata(
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_action, handle_async, Command};
+    use super::{get_provider_models, handle_action, handle_async, Command};
     use crate::action::Action;
     use crate::event::AsyncEvent;
     use crate::services::{
         N8nSnapshot, PromptResult, ProviderSnapshot, Snapshot, WorkflowRunResult,
     };
-    use crate::state::{AppState, FocusPane, StatusLevel, WorkflowItem};
+    use crate::state::{AppState, FocusPane, ModelInfo, StatusLevel, WorkflowItem};
     use argos_agent::AgentOutput;
     use argos_core::{AgentState, N8nRunRef, N8nRunStatus};
 
@@ -1420,6 +1584,78 @@ mod tests {
 
         assert!(commands.is_empty());
         assert_eq!(state.flash.unwrap().level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn slash_insert_opens_and_filters_command_suggestions() {
+        let mut state = AppState::new();
+
+        handle_action(&mut state, Action::ComposerInsert('/'));
+
+        assert!(state.suggestions.contains(&"/help".to_string()));
+        assert!(state
+            .suggestions
+            .contains(&"/provider <backend> <model>".to_string()));
+
+        handle_action(&mut state, Action::ComposerInsert('p'));
+        handle_action(&mut state, Action::ComposerInsert('r'));
+        handle_action(&mut state, Action::ComposerInsert('o'));
+
+        assert_eq!(state.composer.to_text(), "/pro");
+        assert!(state
+            .suggestions
+            .contains(&"/provider <backend> <model>".to_string()));
+        assert!(state.suggestions.contains(&"/providers".to_string()));
+        assert_eq!(state.suggestions.len(), 2);
+    }
+
+    #[test]
+    fn command_palette_does_not_replace_provider_picker() {
+        let mut state = AppState::new();
+
+        handle_action(&mut state, Action::ShowCommandPalette);
+        assert!(state.command_palette.visible);
+        assert!(!state.provider_popup.visible);
+
+        handle_action(&mut state, Action::ShowCommandPalette);
+        assert!(!state.command_palette.visible);
+
+        handle_action(&mut state, Action::ShowProviderPopup);
+        assert!(state.provider_popup.visible);
+        assert!(!state.command_palette.visible);
+    }
+
+    #[test]
+    fn missing_workflow_does_not_leave_unsolicited_error_toast() {
+        let mut state = AppState::new();
+
+        let commands = handle_action(&mut state, Action::RunSelectedWorkflow);
+
+        assert!(commands.is_empty());
+        assert!(state.flash.is_none());
+        assert_eq!(state.activity.last().unwrap().level, StatusLevel::Missing);
+    }
+
+    #[test]
+    fn openrouter_catalog_keeps_provider_models_endpoint_safe() {
+        let mut state = AppState::new();
+
+        handle_async(
+            &mut state,
+            AsyncEvent::ModelsFetched {
+                backend: "openrouter".into(),
+                models: Ok(vec![ModelInfo {
+                    id: "openai/gpt-4.1".into(),
+                    pricing: None,
+                }]),
+            },
+        );
+
+        assert_eq!(
+            get_provider_models(&state, "openrouter"),
+            vec!["openai/gpt-4.1"]
+        );
+        assert_eq!(get_provider_models(&state, "openai"), vec!["gpt-4.1"]);
     }
 
     #[test]

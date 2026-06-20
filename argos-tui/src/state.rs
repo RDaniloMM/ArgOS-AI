@@ -25,6 +25,12 @@ pub struct ProviderPopupState {
     pub column: PopupColumn,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandPaletteState {
+    pub visible: bool,
+    pub selected: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PopupColumn {
     #[default]
@@ -66,7 +72,7 @@ impl FocusPane {
             Self::Workflows => "Workflows",
             Self::Transcript => "Transcript",
             Self::Composer => "Composer",
-            Self::Activity => "Activity",
+            Self::Activity => "Info",
         }
     }
 }
@@ -144,6 +150,7 @@ pub struct AppState {
     pub current_config: Option<Config>,
     pub suggestions: Vec<String>,
     pub provider_popup: ProviderPopupState,
+    pub command_palette: CommandPaletteState,
     pub dynamic_models: HashMap<String, Vec<ModelInfo>>,
     pub activity_visible: bool,
     pub sidebar_visible: bool,
@@ -190,8 +197,9 @@ impl AppState {
             current_config: None,
             suggestions: Vec::new(),
             provider_popup: ProviderPopupState::default(),
+            command_palette: CommandPaletteState::default(),
             dynamic_models: HashMap::new(),
-            activity_visible: false,
+            activity_visible: true,
             sidebar_visible: true,
             session_tokens: 0,
             session_cost: 0.0,

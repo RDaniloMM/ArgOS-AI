@@ -28,6 +28,7 @@ pub enum Action {
     ComposerSelectEnd,
     ComposerAutocomplete,
     ShowProviderPopup,
+    ShowCommandPalette,
     HideProviderPopup,
     PopupUp,
     PopupDown,

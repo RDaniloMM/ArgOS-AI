@@ -1,36 +1,50 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use crate::commands::KNOWN_PROVIDERS;
+use crate::commands::{self, KNOWN_PROVIDERS};
 use crate::composer::CursorPosition;
 use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES, VERSION};
 
-const BG_BASE: Color = Color::Black;
-const BG_PANEL: Color = Color::DarkGray;
-const BG_WORKFLOWS: Color = Color::Rgb(55, 55, 65);
-const BG_COMPOSER: Color = Color::Rgb(44, 47, 55);
-const BG_HIGHLIGHT: Color = Color::Gray;
-const C_ACCENT: Color = Color::Cyan;
-const C_SUBTLE: Color = Color::Gray;
-const C_TITLE: Color = Color::White;
+const BG_BASE: Color = Color::Rgb(8, 11, 18);
+const BG_PANEL: Color = Color::Rgb(16, 22, 34);
+const BG_PANEL_ALT: Color = Color::Rgb(20, 28, 42);
+const BG_WORKFLOWS: Color = Color::Rgb(12, 18, 30);
+const BG_COMPOSER: Color = Color::Rgb(13, 20, 32);
+const BG_HIGHLIGHT: Color = Color::Rgb(36, 53, 76);
+const BG_POPUP: Color = Color::Rgb(11, 16, 28);
+const C_ACCENT: Color = Color::Rgb(92, 214, 255);
+const C_ACCENT_2: Color = Color::Rgb(178, 125, 255);
+const C_SUBTLE: Color = Color::Rgb(142, 158, 181);
+const C_BORDER: Color = Color::Rgb(58, 77, 107);
+const C_TEXT: Color = Color::Rgb(218, 226, 241);
+const C_TITLE: Color = Color::Rgb(245, 249, 255);
+const ARGOS_MASCOT: &str = "⌁(•ᴗ•)>_";
 
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(10)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(1),
+        ])
         .split(frame.area());
 
     render_header(frame, layout[0], state);
     render_body(frame, layout[1], state);
+    render_footer(frame, layout[2], state);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let provider = format!("Provider: {}", state.provider_status.level.label());
-    let n8n = format!("n8n: {}", state.n8n_status.level.label());
+    let workflows = format!(
+        "Workflows: {}",
+        workflow_status_label(state.n8n_status.level)
+    );
     let busy_text = if state.is_submitting_prompt {
         format!("{} Agent thinking…", SPINNER_FRAMES[state.spinner_frame])
     } else if state.is_running_workflow {
@@ -48,22 +62,61 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     let line = Line::from(vec![
         Span::styled(
-            " ArgOS ",
+            format!(" {ARGOS_MASCOT} "),
+            Style::default().fg(C_ACCENT_2).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ArgOS AI ",
             Style::default()
-                .fg(Color::Black)
+                .fg(BG_BASE)
                 .bg(C_ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         badge(provider, state.provider_status.level),
         Span::raw(" "),
-        badge(n8n, state.n8n_status.level),
+        badge(workflows, state.n8n_status.level),
         Span::raw(" "),
         spinner_badge(&busy_text, busy_level),
     ]);
 
     frame.render_widget(
-        Paragraph::new(line).block(Block::default().style(Style::default().bg(BG_BASE))),
+        Paragraph::new(line).alignment(Alignment::Center).block(
+            Block::default()
+                .borders(Borders::TOP | Borders::BOTTOM)
+                .border_style(Style::default().fg(C_BORDER))
+                .style(Style::default().bg(BG_BASE).fg(C_TEXT)),
+        ),
+        area,
+    );
+}
+
+fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let left = if state.sidebar_visible {
+        "F8 hide Connections"
+    } else {
+        "F8 show Connections"
+    };
+    let right = if state.activity_visible {
+        "F7 hide Info"
+    } else {
+        "F7 show Info"
+    };
+    let line = Line::from(vec![
+        Span::styled(" Ctrl+P Commands ", Style::default().fg(C_ACCENT)),
+        Span::styled(" • ", Style::default().fg(C_BORDER)),
+        Span::styled(" F2 Provider/model ", Style::default().fg(C_ACCENT_2)),
+        Span::styled(" • ", Style::default().fg(C_BORDER)),
+        Span::styled(format!(" {left} "), Style::default().fg(C_SUBTLE)),
+        Span::styled(" • ", Style::default().fg(C_BORDER)),
+        Span::styled(format!(" {right} "), Style::default().fg(C_SUBTLE)),
+        Span::styled(
+            " • Enter send • Shift+Enter newline ",
+            Style::default().fg(C_SUBTLE),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(BG_BASE).fg(C_TEXT)),
         area,
     );
 }
@@ -74,11 +127,11 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     let constraints: Vec<Constraint> = match (left_visible, right_visible) {
         (true, true) => vec![
-            Constraint::Percentage(25),
+            Constraint::Percentage(24),
             Constraint::Length(1),
-            Constraint::Percentage(44),
+            Constraint::Min(20),
             Constraint::Length(1),
-            Constraint::Percentage(30),
+            Constraint::Length(right_panel_width(area.width)),
         ],
         (true, false) => vec![
             Constraint::Percentage(30),
@@ -86,9 +139,9 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             Constraint::Percentage(70),
         ],
         (false, true) => vec![
-            Constraint::Percentage(60),
+            Constraint::Min(20),
             Constraint::Length(1),
-            Constraint::Percentage(40),
+            Constraint::Length(right_panel_width(area.width)),
         ],
         (false, false) => vec![Constraint::Percentage(100)],
     };
@@ -127,6 +180,10 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     if state.provider_popup.visible {
         render_provider_popup(frame, area, state);
+    }
+
+    if state.command_palette.visible {
+        render_command_palette(frame, area, state);
     }
 
     if let Some(flash) = &state.flash {
@@ -170,15 +227,11 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .constraints([Constraint::Length(7), Constraint::Min(5)])
         .split(area);
 
-    fill_area(frame, chunks[0], BG_PANEL);
-    fill_area(frame, chunks[1], BG_PANEL);
-
+    let connections_block = panel_block("Connections", false)
+        .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD));
+    let connections_inner = connections_block.inner(chunks[0]);
+    frame.render_widget(connections_block, chunks[0]);
     let status_lines = vec![
-        Line::from(vec![Span::styled(
-            "Connections",
-            Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
         line_with_label("Provider", &state.provider_status.title),
         Line::from(state.provider_status.detail.clone()),
         Line::raw(""),
@@ -186,44 +239,21 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         Line::from(state.n8n_status.detail.clone()),
     ];
     frame.render_widget(
-        Paragraph::new(Text::from(status_lines)).wrap(Wrap { trim: true }),
-        chunks[0],
+        Paragraph::new(Text::from(status_lines))
+            .style(Style::default().fg(C_TEXT).bg(BG_PANEL))
+            .wrap(Wrap { trim: true }),
+        connections_inner,
     );
 
     let is_focused = state.focus == FocusPane::Workflows;
-    let title_color = if is_focused { C_ACCENT } else { C_TITLE };
-    let title = vec![Span::styled(
-        "Workflows",
-        Style::default()
-            .fg(title_color)
-            .add_modifier(Modifier::BOLD),
-    )];
-    fill_area(
-        frame,
-        Rect {
-            height: 1,
-            ..chunks[1]
-        },
-        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(title)),
-        Rect {
-            height: 1,
-            ..chunks[1]
-        },
-    );
-
-    let list_area = Rect {
-        y: chunks[1].y + 1,
-        height: chunks[1].height.saturating_sub(1),
-        ..chunks[1]
-    };
+    let workflows_block = panel_block("Workflows", is_focused);
+    let list_area = workflows_block.inner(chunks[1]);
+    frame.render_widget(workflows_block, chunks[1]);
     fill_area(frame, list_area, BG_WORKFLOWS);
 
     if state.workflows.is_empty() {
         frame.render_widget(
-            Paragraph::new(state.n8n_status.detail.clone()).wrap(Wrap { trim: true }),
+            Paragraph::new(workflow_empty_text(state)).wrap(Wrap { trim: true }),
             list_area,
         );
         return;
@@ -234,8 +264,8 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .iter()
         .map(|wf| {
             ListItem::new(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Yellow)),
-                Span::raw(wf.name.clone()),
+                Span::styled("• ", Style::default().fg(C_ACCENT_2)),
+                Span::styled(wf.name.clone(), Style::default().fg(C_TEXT)),
             ]))
         })
         .collect();
@@ -244,7 +274,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_stateful_widget(
         List::new(items).highlight_style(
             Style::default()
-                .fg(Color::Black)
+                .fg(BG_BASE)
                 .bg(C_ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -260,83 +290,24 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .split(area);
 
     let tf = state.focus == FocusPane::Transcript;
-    let transcript_title = Line::from(vec![Span::styled(
-        "Transcript",
-        Style::default()
-            .fg(if tf { C_ACCENT } else { C_TITLE })
-            .add_modifier(Modifier::BOLD),
-    )]);
-    let t_title_rect = Rect {
-        height: 1,
-        ..chunks[0]
-    };
-    fill_area(
-        frame,
-        t_title_rect,
-        if tf { BG_HIGHLIGHT } else { BG_PANEL },
-    );
-    frame.render_widget(Paragraph::new(transcript_title), t_title_rect);
-
-    let transcript_body = Rect {
-        y: chunks[0].y + 1,
-        height: chunks[0].height.saturating_sub(1),
-        ..chunks[0]
-    };
+    let transcript_block = panel_block("Transcript", tf);
+    let transcript_body = transcript_block.inner(chunks[0]);
+    frame.render_widget(transcript_block, chunks[0]);
     frame.render_widget(
         Paragraph::new(transcript_text(state))
+            .style(Style::default().fg(C_TEXT).bg(BG_PANEL_ALT))
             .scroll((state.transcript_scroll, 0))
             .wrap(Wrap { trim: false }),
         transcript_body,
     );
 
-    let has_suggestions = !state.suggestions.is_empty();
-    let composer_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(if has_suggestions {
-            vec![Constraint::Length(1), Constraint::Min(5)]
-        } else {
-            vec![Constraint::Min(6)]
-        })
-        .split(chunks[1]);
+    let composer_area = chunks[1];
 
-    let (suggestion_area, composer_area) = if has_suggestions {
-        (Some(composer_chunks[0]), composer_chunks[1])
-    } else {
-        (None, composer_chunks[0])
-    };
-
-    if let Some(area) = suggestion_area {
-        render_suggestions(frame, area, state);
-    }
-
-    let is_cf = state.focus == FocusPane::Composer;
-    let composer_title = Line::from(vec![
-        Span::styled(
-            "Composer",
-            Style::default()
-                .fg(if is_cf { C_ACCENT } else { C_TITLE })
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-        Span::styled(composer_status(state), Style::default().fg(C_SUBTLE)),
-    ]);
     let is_focused = state.focus == FocusPane::Composer;
-    let c_title_rect = Rect {
-        height: 1,
-        ..composer_area
-    };
-    fill_area(
-        frame,
-        c_title_rect,
-        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
-    );
-    frame.render_widget(Paragraph::new(composer_title), c_title_rect);
-
-    let inner = Rect {
-        y: composer_area.y + 1,
-        height: composer_area.height.saturating_sub(1),
-        ..composer_area
-    };
+    let composer_title = format!("Composer {}", composer_status(state));
+    let composer_block = panel_block(Line::from(composer_title), is_focused);
+    let inner = composer_block.inner(composer_area);
+    frame.render_widget(composer_block, composer_area);
     let visible_height = inner.height.max(1) as usize;
     let all_lines = state.composer.lines();
     let start = all_lines.len().saturating_sub(visible_height);
@@ -360,38 +331,17 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
+
+    if !state.suggestions.is_empty() {
+        render_suggestions(frame, area, composer_area, state);
+    }
 }
 
 fn render_info_panel(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(4)])
-        .split(area);
-
-    fill_area(frame, chunks[0], BG_PANEL);
-    fill_area(frame, chunks[1], BG_PANEL);
-
     let is_focused = state.focus == FocusPane::Activity;
-    let title_color = if is_focused { C_ACCENT } else { C_TITLE };
-    let title = Line::from(vec![Span::styled(
-        "Info",
-        Style::default()
-            .fg(title_color)
-            .add_modifier(Modifier::BOLD),
-    )]);
-    frame.render_widget(
-        Paragraph::new(title),
-        Rect {
-            height: 1,
-            ..chunks[0]
-        },
-    );
-
-    let info_body = Rect {
-        y: chunks[0].y + 1,
-        height: chunks[0].height - 1,
-        ..chunks[0]
-    };
+    let info_block = panel_block("Info", is_focused);
+    let info_body = info_block.inner(area);
+    frame.render_widget(info_block, area);
     let mut lines: Vec<Line> = Vec::new();
 
     if let Some(ref config) = state.current_config {
@@ -414,13 +364,14 @@ fn render_info_panel(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         } else {
             Color::Green
         };
-        lines.push(Line::from(vec![Span::styled(
-            format!("{backend} · {model}"),
+        lines.push(line_with_label("Provider", backend));
+        lines.push(Line::from(Span::styled(
+            model.to_string(),
             Style::default().fg(C_SUBTLE),
-        )]));
+        )));
         lines.push(Line::from(vec![
             Span::raw(format!(
-                "Tokens: {} / {}  ",
+                "Tk: {}/{} ",
                 stkn(state.session_tokens),
                 stkn(max_ctx)
             )),
@@ -430,57 +381,30 @@ fn render_info_panel(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         lines.push(Line::raw(""));
     }
 
-    lines.push(Line::from(vec![Span::styled(
-        format!("{}  v{VERSION}", state.cwd.display()),
+    lines.push(line_with_label(
+        "Workflows",
+        workflow_status_label(state.n8n_status.level),
+    ));
+    lines.push(Line::from(Span::styled(
+        state.n8n_status.detail.clone(),
         Style::default().fg(C_SUBTLE),
-    )]));
+    )));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("v{VERSION}"),
+        Style::default().fg(C_SUBTLE),
+    )));
+    lines.push(Line::from(Span::styled(
+        state.cwd.display().to_string(),
+        Style::default().fg(C_SUBTLE),
+    )));
 
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true }),
+        Paragraph::new(Text::from(lines))
+            .style(Style::default().fg(C_TEXT).bg(BG_PANEL))
+            .wrap(Wrap { trim: true }),
         info_body,
     );
-
-    // Activity compact
-    let act_title = vec![Span::styled(
-        "Activity",
-        Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
-    )];
-    frame.render_widget(
-        Paragraph::new(Line::from(act_title)),
-        Rect {
-            height: 1,
-            ..chunks[1]
-        },
-    );
-
-    let act_body = Rect {
-        y: chunks[1].y + 1,
-        height: chunks[1].height.saturating_sub(1),
-        ..chunks[1]
-    };
-    let items: Vec<ListItem> = state
-        .activity
-        .iter()
-        .rev()
-        .take(8)
-        .map(|entry| {
-            ListItem::new(Line::from(vec![Span::styled(
-                format!("{} {}", focus_icon(entry.level), entry.title),
-                focus_style(entry.level),
-            )]))
-        })
-        .collect();
-    let mut list_state = ListState::default();
-    frame.render_stateful_widget(List::new(items), act_body, &mut list_state);
-}
-
-fn focus_icon(level: StatusLevel) -> &'static str {
-    match level {
-        StatusLevel::Success => "✓",
-        StatusLevel::Error => "✗",
-        StatusLevel::Loading => "○",
-        StatusLevel::Missing => "?",
-    }
 }
 
 fn stkn(tokens: u64) -> String {
@@ -496,17 +420,14 @@ fn stkn(tokens: u64) -> String {
 fn transcript_text(state: &AppState) -> Text<'static> {
     let mut lines = Vec::new();
     for entry in &state.transcript {
-        lines.push(Line::from(vec![Span::styled(
-            format!("{}:", entry.speaker),
-            Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
-        )]));
+        let style = transcript_style(&entry.speaker);
         for body_line in entry.body.lines() {
-            lines.push(Line::from(format!("  {body_line}")));
+            lines.push(transcript_body_line(body_line, style));
         }
         if let Some(meta) = &entry.meta {
             lines.push(Line::from(vec![Span::styled(
-                format!("  {meta}"),
-                Style::default().fg(Color::DarkGray),
+                format!("{}{}", style.indent, meta),
+                Style::default().fg(C_SUBTLE),
             )]));
         }
         lines.push(Line::raw(""));
@@ -514,8 +435,88 @@ fn transcript_text(state: &AppState) -> Text<'static> {
     Text::from(lines)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TranscriptStyle {
+    glyph: &'static str,
+    indent: &'static str,
+    glyph_color: Color,
+    body_color: Color,
+}
+
+fn transcript_style(speaker: &str) -> TranscriptStyle {
+    match speaker {
+        "You" => TranscriptStyle {
+            glyph: "›",
+            indent: "      ",
+            glyph_color: C_ACCENT,
+            body_color: C_TEXT,
+        },
+        "ArgOS" => TranscriptStyle {
+            glyph: "⌁",
+            indent: "",
+            glyph_color: C_ACCENT_2,
+            body_color: C_TEXT,
+        },
+        _ => TranscriptStyle {
+            glyph: "·",
+            indent: "  ",
+            glyph_color: C_SUBTLE,
+            body_color: C_SUBTLE,
+        },
+    }
+}
+
+fn transcript_body_line(body_line: &str, style: TranscriptStyle) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(style.indent),
+        Span::styled(
+            format!("{} ", style.glyph),
+            Style::default()
+                .fg(style.glyph_color)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::styled(body_line.to_string(), Style::default().fg(style.body_color)),
+    ])
+}
+
+fn workflow_status_label(level: StatusLevel) -> &'static str {
+    match level {
+        StatusLevel::Missing => "Optional",
+        _ => level.label(),
+    }
+}
+
+fn workflow_empty_text(state: &AppState) -> String {
+    if state.n8n_status.level == StatusLevel::Missing {
+        "Workflow automation is optional. Configure n8n only if you want workflow actions."
+            .to_string()
+    } else {
+        state.n8n_status.detail.clone()
+    }
+}
+
+fn right_panel_width(total_width: u16) -> u16 {
+    (total_width / 4).clamp(18, 30)
+}
+
 fn fill_area(frame: &mut Frame<'_>, area: Rect, color: Color) {
     frame.render_widget(Paragraph::new("").style(Style::default().bg(color)), area);
+}
+
+fn panel_block<'a>(title: impl Into<Line<'a>>, focused: bool) -> Block<'a> {
+    let border = if focused { C_ACCENT } else { C_BORDER };
+    let bg = if focused { BG_HIGHLIGHT } else { BG_PANEL };
+    Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(if focused { C_ACCENT } else { C_TITLE })
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .border_style(Style::default().fg(border))
+        .style(Style::default().fg(C_TEXT).bg(BG_PANEL))
 }
 
 fn line_with_label(label: &str, value: &str) -> Line<'static> {
@@ -524,7 +525,7 @@ fn line_with_label(label: &str, value: &str) -> Line<'static> {
             format!("{label}: "),
             Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
         ),
-        Span::raw(value.to_string()),
+        Span::styled(value.to_string(), Style::default().fg(C_TEXT)),
     ])
 }
 
@@ -544,10 +545,10 @@ fn spinner_badge(text: &str, level: StatusLevel) -> Span<'static> {
 
 fn focus_style(level: StatusLevel) -> Style {
     match level {
-        StatusLevel::Loading => Style::default().fg(Color::Yellow),
-        StatusLevel::Success => Style::default().fg(Color::Green),
-        StatusLevel::Missing => Style::default().fg(Color::Blue),
-        StatusLevel::Error => Style::default().fg(Color::Red),
+        StatusLevel::Loading => Style::default().fg(Color::Rgb(255, 202, 87)),
+        StatusLevel::Success => Style::default().fg(Color::Rgb(108, 240, 166)),
+        StatusLevel::Missing => Style::default().fg(Color::Rgb(125, 168, 255)),
+        StatusLevel::Error => Style::default().fg(Color::Rgb(255, 105, 130)),
     }
 }
 
@@ -582,33 +583,73 @@ fn display_width_up_to_col(line: &str, col: usize) -> usize {
         .sum()
 }
 
-fn render_suggestions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let text: String = state
+fn render_suggestions(
+    frame: &mut Frame<'_>,
+    center_area: Rect,
+    composer_area: Rect,
+    state: &AppState,
+) {
+    let popup_area = suggestions_popup_area(center_area, composer_area, state.suggestions.len());
+    if popup_area.is_empty() {
+        return;
+    }
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Slash commands ")
+        .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(C_ACCENT))
+        .style(Style::default().fg(C_TEXT).bg(BG_POPUP));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let visible_rows = inner.height as usize;
+    let items: Vec<ListItem> = state
         .suggestions
         .iter()
+        .take(visible_rows)
         .enumerate()
-        .map(|(i, s)| {
-            if i == 0 {
-                format!(" → {s}")
-            } else {
-                format!("  │  {s}")
-            }
+        .map(|(index, suggestion)| {
+            let marker = if index == 0 { "→" } else { " " };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {marker} "),
+                    Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(suggestion.clone(), Style::default().fg(C_TEXT)),
+            ]))
         })
-        .collect::<Vec<_>>()
-        .join("");
+        .collect();
 
-    let spans = if text.is_empty() {
-        vec![Span::raw("")]
-    } else {
-        vec![Span::styled(
-            text,
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightCyan)
-                .add_modifier(Modifier::BOLD),
-        )]
-    };
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(
+        List::new(items).style(Style::default().fg(C_TEXT).bg(BG_POPUP)),
+        inner,
+    );
+}
+
+fn suggestions_popup_area(center_area: Rect, composer_area: Rect, suggestion_count: usize) -> Rect {
+    if suggestion_count == 0 || center_area.is_empty() || composer_area.is_empty() {
+        return Rect::default();
+    }
+
+    let available_above = composer_area.y.saturating_sub(center_area.y);
+    let desired_height = (suggestion_count as u16 + 2).clamp(3, 8);
+    let height = desired_height.min(available_above).min(center_area.height);
+    if height < 3 {
+        return Rect::default();
+    }
+
+    let width = composer_area.width.min(72).min(center_area.width);
+    if width == 0 {
+        return Rect::default();
+    }
+    Rect {
+        x: composer_area.x,
+        y: composer_area.y.saturating_sub(height).max(center_area.y),
+        width,
+        height,
+    }
 }
 
 fn composer_lines(
@@ -654,7 +695,7 @@ fn composer_line(
         Span::styled(
             selected,
             Style::default()
-                .fg(Color::Black)
+                .fg(BG_BASE)
                 .bg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -677,8 +718,10 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Select Provider  ← → columns  ↑↓ navigate  Enter select  Esc close")
-        .border_style(Style::default().fg(Color::Cyan));
+        .title("Provider & model  ← → columns  ↑↓ navigate  Enter select  Esc close")
+        .title_style(Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(C_ACCENT_2))
+        .style(Style::default().fg(C_TEXT).bg(BG_POPUP));
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
@@ -702,21 +745,27 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 },
                 kp.backend
             );
-            ListItem::new(content)
+            ListItem::new(Span::styled(content, Style::default().fg(C_TEXT)))
         })
         .collect();
     let mut provider_list = ListState::default();
     provider_list.select(Some(state.provider_popup.selected_provider));
     frame.render_stateful_widget(
         List::new(provider_items)
-            .block(Block::default().borders(Borders::ALL).title("Provider"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Provider")
+                    .border_style(Style::default().fg(C_BORDER))
+                    .style(Style::default().bg(BG_POPUP)),
+            )
             .highlight_style(if state.provider_popup.column == PopupColumn::Provider {
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(BG_BASE)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                Style::default().fg(C_SUBTLE).bg(BG_HIGHLIGHT)
             }),
         columns[0],
         &mut provider_list,
@@ -741,7 +790,10 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                     } else {
                         " "
                     };
-                    ListItem::new(format!(" {marker}  {m}"))
+                    ListItem::new(Span::styled(
+                        format!(" {marker}  {m}"),
+                        Style::default().fg(C_TEXT),
+                    ))
                 })
                 .collect()
         })
@@ -750,24 +802,103 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     model_list.select(Some(state.provider_popup.selected_model));
     frame.render_stateful_widget(
         List::new(model_items)
-            .block(Block::default().borders(Borders::ALL).title("Model"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Model")
+                    .border_style(Style::default().fg(C_BORDER))
+                    .style(Style::default().bg(BG_POPUP)),
+            )
             .highlight_style(if state.provider_popup.column == PopupColumn::Model {
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(BG_BASE)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray).bg(Color::DarkGray)
+                Style::default().fg(C_SUBTLE).bg(BG_HIGHLIGHT)
             }),
         columns[1],
         &mut model_list,
     );
 }
 
+fn render_command_palette(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let popup_width = 72u16
+        .min(area.width.saturating_sub(4).max(20))
+        .min(area.width);
+    let popup_height = 18u16
+        .min(area.height.saturating_sub(4).max(8))
+        .min(area.height);
+    let popup_area = Rect {
+        x: area.x + area.width.saturating_sub(popup_width) / 2,
+        y: area.y + area.height.saturating_sub(popup_height) / 3,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {ARGOS_MASCOT} Command palette "))
+        .title_style(Style::default().fg(C_ACCENT).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(C_ACCENT))
+        .style(Style::default().fg(C_TEXT).bg(BG_POPUP));
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(4)])
+        .split(inner);
+    let hint = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(C_ACCENT)),
+        Span::raw(" select  "),
+        Span::styled("Enter", Style::default().fg(C_ACCENT)),
+        Span::raw(" insert command  "),
+        Span::styled("Esc", Style::default().fg(C_ACCENT)),
+        Span::raw(" close"),
+    ]);
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(C_SUBTLE).bg(BG_POPUP)),
+        chunks[0],
+    );
+
+    let items: Vec<ListItem> = commands::command_definitions()
+        .iter()
+        .map(|command| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{:<28}", command.signature),
+                    Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(command.description, Style::default().fg(C_SUBTLE)),
+            ]))
+        })
+        .collect();
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.command_palette.selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .style(Style::default().fg(C_TEXT).bg(BG_POPUP))
+            .highlight_style(
+                Style::default()
+                    .fg(BG_BASE)
+                    .bg(C_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        chunks[1],
+        &mut list_state,
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{composer_cursor_position, composer_line, display_width_up_to_col};
+    use super::{
+        composer_cursor_position, composer_line, display_width_up_to_col, suggestions_popup_area,
+        transcript_text,
+    };
     use crate::composer::CursorPosition;
+    use crate::state::AppState;
     use ratatui::layout::Rect;
 
     #[test]
@@ -824,5 +955,48 @@ mod tests {
         assert_eq!(line.spans[0].content.as_ref(), "ab");
         assert_eq!(line.spans[1].content.as_ref(), "cd");
         assert_eq!(line.spans[2].content.as_ref(), "ef");
+    }
+
+    #[test]
+    fn slash_suggestion_popup_sits_above_composer() {
+        let center = Rect {
+            x: 10,
+            y: 5,
+            width: 80,
+            height: 30,
+        };
+        let composer = Rect {
+            x: 10,
+            y: 30,
+            width: 80,
+            height: 5,
+        };
+
+        let popup = suggestions_popup_area(center, composer, 6);
+
+        assert_eq!(popup.x, composer.x);
+        assert_eq!(popup.y + popup.height, composer.y);
+        assert!(popup.height >= 3);
+        assert!(popup.width <= composer.width);
+    }
+
+    #[test]
+    fn transcript_hides_explicit_speaker_labels() {
+        let mut state = AppState::new();
+        state.push_transcript("You", "hello", None);
+        state.push_transcript("ArgOS", "hi", None);
+
+        let rendered = transcript_text(&state)
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(!rendered.contains("You:"));
+        assert!(!rendered.contains("ArgOS:"));
+        assert!(rendered.contains("hello"));
+        assert!(rendered.contains("hi"));
     }
 }

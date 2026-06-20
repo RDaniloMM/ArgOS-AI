@@ -114,7 +114,7 @@ Available commands:
   /quit              Quit ArgOS TUI
   /config            Show current configuration
   /providers         List known providers and endpoints
-  /refresh           Refresh provider and n8n status
+  /refresh           Refresh provider and optional workflow status
   /provider <bk> <m> Set provider (auto-configures endpoint + key ref)
   /model <name>      Change the model
   /endpoint <url>    Change the provider endpoint
@@ -142,6 +142,13 @@ pub struct KnownProvider {
     pub default_key_ref: Option<&'static str>,
     pub models: &'static [&'static str],
     pub pricing: Option<Pricing>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandDefinition {
+    pub signature: &'static str,
+    pub description: &'static str,
+    pub insert_text: &'static str,
 }
 
 pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
@@ -347,31 +354,97 @@ impl KnownProvider {
     }
 }
 
-const COMMANDS: &[(&str, &str)] = &[
-    ("/help", "Show available commands"),
-    ("/clear", "Clear the transcript"),
-    ("/quit", "Quit ArgOS TUI"),
-    ("/config", "Show current configuration"),
-    ("/providers", "List known providers and models"),
-    ("/refresh", "Refresh provider and n8n status"),
-    (
-        "/provider <backend> <model>",
-        "Set provider (auto-configures endpoint + key ref)",
-    ),
-    ("/model <name>", "Change the model"),
-    ("/endpoint <url>", "Change the provider endpoint"),
-    ("/key-ref <ref>", "Set the API key reference"),
-    ("/n8n <url>", "Set the n8n endpoint URL"),
-    ("/n8n-mode <rest|mcp>", "Set n8n mode"),
-    ("/n8n-key-ref <ref>", "Set the n8n API key reference"),
-    (
-        "/vault set <ref> <secret>",
-        "Store a secret in the OS keyring",
-    ),
-    ("/vault remove <ref>", "Remove a secret from keyring"),
-    ("/cd <path>", "Change working directory"),
-    ("/clearsessions", "Delete all saved session files"),
+const COMMANDS: &[CommandDefinition] = &[
+    CommandDefinition {
+        signature: "/help",
+        description: "Show available commands",
+        insert_text: "/help",
+    },
+    CommandDefinition {
+        signature: "/clear",
+        description: "Clear the transcript",
+        insert_text: "/clear",
+    },
+    CommandDefinition {
+        signature: "/quit",
+        description: "Quit ArgOS TUI",
+        insert_text: "/quit",
+    },
+    CommandDefinition {
+        signature: "/config",
+        description: "Show current configuration",
+        insert_text: "/config",
+    },
+    CommandDefinition {
+        signature: "/providers",
+        description: "List known providers and models",
+        insert_text: "/providers",
+    },
+    CommandDefinition {
+        signature: "/refresh",
+        description: "Refresh provider and optional workflow status",
+        insert_text: "/refresh",
+    },
+    CommandDefinition {
+        signature: "/provider <backend> <model>",
+        description: "Set provider (auto-configures endpoint + key ref)",
+        insert_text: "/provider ",
+    },
+    CommandDefinition {
+        signature: "/model <name>",
+        description: "Change the model",
+        insert_text: "/model ",
+    },
+    CommandDefinition {
+        signature: "/endpoint <url>",
+        description: "Change the provider endpoint",
+        insert_text: "/endpoint ",
+    },
+    CommandDefinition {
+        signature: "/key-ref <ref>",
+        description: "Set the API key reference",
+        insert_text: "/key-ref ",
+    },
+    CommandDefinition {
+        signature: "/n8n <url>",
+        description: "Set the n8n endpoint URL",
+        insert_text: "/n8n ",
+    },
+    CommandDefinition {
+        signature: "/n8n-mode <rest|mcp>",
+        description: "Set n8n mode",
+        insert_text: "/n8n-mode ",
+    },
+    CommandDefinition {
+        signature: "/n8n-key-ref <ref>",
+        description: "Set the n8n API key reference",
+        insert_text: "/n8n-key-ref ",
+    },
+    CommandDefinition {
+        signature: "/vault set <ref> <secret>",
+        description: "Store a secret in the OS keyring",
+        insert_text: "/vault set ",
+    },
+    CommandDefinition {
+        signature: "/vault remove <ref>",
+        description: "Remove a secret from keyring",
+        insert_text: "/vault remove ",
+    },
+    CommandDefinition {
+        signature: "/cd <path>",
+        description: "Change working directory",
+        insert_text: "/cd ",
+    },
+    CommandDefinition {
+        signature: "/clearsessions",
+        description: "Delete all saved session files",
+        insert_text: "/clearsessions",
+    },
 ];
+
+pub fn command_definitions() -> &'static [CommandDefinition] {
+    COMMANDS
+}
 
 pub fn suggest_commands(prefix: &str) -> Vec<String> {
     let text = prefix.trim();
@@ -382,8 +455,8 @@ pub fn suggest_commands(prefix: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     COMMANDS
         .iter()
-        .filter(|(sig, _)| sig.to_lowercase().starts_with(&lower))
-        .map(|(sig, _)| sig.to_string())
+        .filter(|cmd| cmd.signature.to_lowercase().starts_with(&lower))
+        .map(|cmd| cmd.signature.to_string())
         .collect()
 }
 

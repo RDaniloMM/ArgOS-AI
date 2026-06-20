@@ -19,6 +19,7 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::F(6) => Some(Action::RunSelectedWorkflow),
         KeyCode::F(7) => Some(Action::ToggleActivity),
         KeyCode::F(8) => Some(Action::ToggleSidebar),
+        KeyCode::F(2) => Some(Action::ShowProviderPopup),
         KeyCode::Char('c') if ctrl && shift => Some(Action::CopySelection),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
@@ -66,7 +67,7 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::Char('r') if focus != FocusPane::Composer => Some(Action::Refresh),
         KeyCode::Char('j') if focus != FocusPane::Composer => Some(Action::MoveDown),
         KeyCode::Char('k') if focus != FocusPane::Composer => Some(Action::MoveUp),
-        KeyCode::Char('p') if ctrl => Some(Action::ShowProviderPopup),
+        KeyCode::Char('p') if ctrl => Some(Action::ShowCommandPalette),
         KeyCode::Enter if focus == FocusPane::Composer && shift => Some(Action::ComposerNewline),
         KeyCode::Enter if focus == FocusPane::Composer => Some(Action::SubmitPrompt),
         KeyCode::Backspace if focus == FocusPane::Composer => Some(Action::ComposerBackspace),
@@ -145,6 +146,21 @@ mod tests {
         assert_eq!(
             map_key(key(KeyCode::Char('j')), FocusPane::Workflows),
             Some(Action::MoveDown)
+        );
+    }
+
+    #[test]
+    fn ctrl_p_opens_command_palette_and_f2_keeps_provider_picker() {
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                FocusPane::Composer
+            ),
+            Some(Action::ShowCommandPalette)
+        );
+        assert_eq!(
+            map_key(key(KeyCode::F(2)), FocusPane::Composer),
+            Some(Action::ShowProviderPopup)
         );
     }
 

@@ -103,9 +103,8 @@ impl AppServices for RealServices {
                 },
                 n8n: N8nSnapshot {
                     level: StatusLevel::Missing,
-                    title: "n8n".into(),
-                    detail: "Add an [n8n] section to .argos/config.toml to list and run workflows."
-                        .into(),
+                    title: "Workflows".into(),
+                    detail: "Optional. Configure n8n only if you want workflow actions.".into(),
                     workflows: Vec::new(),
                 },
                 config: None,
@@ -279,8 +278,8 @@ async fn n8n_snapshot(config: &Config) -> N8nSnapshot {
     let Some(connection) = config.n8n.clone() else {
         return N8nSnapshot {
             level: StatusLevel::Missing,
-            title: "n8n".into(),
-            detail: "Add an [n8n] section to .argos/config.toml to list and run workflows.".into(),
+            title: "Workflows".into(),
+            detail: "Optional. Configure n8n only if you want workflow actions.".into(),
             workflows: Vec::new(),
         };
     };

@@ -16,7 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::app::{handle_action, handle_async, Command};
+use crate::app::{handle_action, handle_async, startup_commands, Command};
 use crate::event::{AsyncEvent, Event};
 use crate::keymap::map_key;
 use crate::services::{AppServices, RealServices};
@@ -47,7 +47,7 @@ pub async fn run(options: RunOptions) -> Result<(), Box<dyn Error>> {
     let _input = InputThread::spawn(event_tx);
 
     dispatch_commands(
-        handle_action(&mut state, crate::action::Action::Refresh),
+        startup_commands(&mut state),
         services.clone(),
         command_tx.clone(),
     );
