@@ -1371,7 +1371,7 @@ mod tests {
                     ],
                 },
                 config: None,
-            })),
+            }))),
         );
 
         assert!(!state.is_loading_snapshot);
