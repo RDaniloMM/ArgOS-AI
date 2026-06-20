@@ -108,9 +108,7 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         col_idx += 2; // skip panel + gap
     }
     // center column
-    if left_visible && right_visible {
-        render_center(frame, columns[2], state);
-    } else if left_visible {
+    if left_visible {
         render_center(frame, columns[2], state);
     } else if right_visible {
         render_center(frame, columns[col_idx], state);

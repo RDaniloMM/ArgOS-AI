@@ -207,8 +207,8 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 } else {
                     let mut parts: Vec<String> = Vec::new();
                     parts.push(lines[start.row].chars().skip(start.col).collect());
-                    for row in (start.row + 1)..end.row {
-                        parts.push(lines[row].to_string());
+                    for line in lines[(start.row + 1)..end.row].iter() {
+                        parts.push(line.to_string());
                     }
                     parts.push(lines[end.row].chars().take(end.col).collect());
                     parts.join("\n")
