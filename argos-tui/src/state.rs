@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use argos_core::Config;
+use argos_core::{Config, ProviderConfig};
 
 use crate::composer::ComposerBuffer;
 
@@ -211,6 +211,26 @@ impl AppState {
 
     pub fn selected_workflow(&self) -> Option<&WorkflowItem> {
         self.workflows.get(self.selected_workflow)
+    }
+
+    pub fn configured_providers(&self) -> &[ProviderConfig] {
+        self.current_config
+            .as_ref()
+            .map(|config| config.providers.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn selected_configured_provider(&self) -> Option<&ProviderConfig> {
+        self.configured_providers()
+            .get(self.provider_popup.selected_provider)
+    }
+
+    pub fn provider_popup_add_index(&self) -> usize {
+        self.configured_providers().len()
+    }
+
+    pub fn provider_popup_is_add_selected(&self) -> bool {
+        self.provider_popup.selected_provider == self.provider_popup_add_index()
     }
 
     pub fn move_workflow_selection(&mut self, delta: isize) {

@@ -176,17 +176,37 @@ impl AppServices for RealServices {
 
     async fn fetch_models(
         &self,
-        _backend: &str,
+        backend: &str,
         endpoint: &str,
         api_key_ref: Option<&str>,
     ) -> Result<Vec<ModelInfo>, String> {
-        let url = format!("{}/models", endpoint.trim_end_matches('/'));
+        let backend = backend.trim().to_lowercase();
+        let url = if backend == "ollama" {
+            format!("{}/api/tags", endpoint.trim_end_matches('/'))
+        } else {
+            format!("{}/models", endpoint.trim_end_matches('/'))
+        };
         let client = reqwest::Client::new();
         let mut req = client.get(&url);
 
-        if let Some(key_ref) = api_key_ref {
-            if let Ok(api_key) = retrieve_secret(Some(key_ref)).await {
-                req = req.header("Authorization", format!("Bearer {api_key}"));
+        if backend != "ollama" {
+            if backend == "openrouter" {
+                if let Some(key_ref) = api_key_ref {
+                    let api_key = retrieve_secret(Some(key_ref)).await?;
+                    req = req.header("Authorization", format!("Bearer {api_key}"));
+                }
+            } else {
+                let key_ref = api_key_ref.ok_or_else(|| {
+                    format!("provider `{backend}` needs an api_key_ref before fetching models")
+                })?;
+                let api_key = retrieve_secret(Some(key_ref)).await?;
+                if backend == "anthropic" {
+                    req = req
+                        .header("x-api-key", api_key)
+                        .header("anthropic-version", "2023-06-01");
+                } else {
+                    req = req.header("Authorization", format!("Bearer {api_key}"));
+                }
             }
         }
 
@@ -422,7 +442,7 @@ fn parse_model_list(body: &str) -> Result<Vec<ModelInfo>, String> {
     let names: Vec<ModelInfo> = models
         .iter()
         .filter_map(|m| {
-            let id = m["id"].as_str()?;
+            let id = m["id"].as_str().or_else(|| m["name"].as_str())?;
             let pricing = parse_pricing(m);
             Some(ModelInfo {
                 id: id.to_string(),
@@ -450,7 +470,9 @@ fn parse_pricing(m: &serde_json::Value) -> Option<ModelPricing> {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_n8n_transport, unsupported_mcp_message, N8nTransportPlan};
+    use super::{
+        parse_model_list, select_n8n_transport, unsupported_mcp_message, N8nTransportPlan,
+    };
     use argos_core::{ConnMode, N8nConnection};
     use url::Url;
 
@@ -478,5 +500,24 @@ mod tests {
         assert_eq!(err, unsupported_mcp_message(&conn));
         assert!(err.contains("cannot compose the MCP transport"));
         assert!(err.contains("n8n.mode = \"rest\""));
+    }
+
+    #[test]
+    fn parse_model_list_preserves_native_slash_model_ids() {
+        let models = parse_model_list(
+            r#"{
+                "models": [
+                    {"name": "models/gemini-2.5-flash"},
+                    {"id": "models/gemini-2.5-pro"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let ids: Vec<String> = models.into_iter().map(|model| model.id).collect();
+        assert_eq!(
+            ids,
+            vec!["models/gemini-2.5-flash", "models/gemini-2.5-pro"]
+        );
     }
 }

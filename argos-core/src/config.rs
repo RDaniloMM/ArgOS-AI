@@ -1,7 +1,8 @@
 //! Configuration domain types.
 //!
 //! The top-level `Config` struct is deserialised from `.argos/config.toml`.
-//! It carries the n8n connection, provider settings, storage profile, and
+//! It carries the n8n connection, provider settings, configured provider list,
+//! storage profile, and
 //! tunable parameters like the reuse similarity threshold.
 
 use crate::n8n::N8nConnection;
@@ -70,8 +71,11 @@ pub struct Config {
     /// Connection to the n8n instance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n8n: Option<N8nConnection>,
-    /// The LLM provider for completions.
+    /// The active LLM provider for completions.
     pub provider: ProviderConfig,
+    /// Providers explicitly configured by the user for TUI selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderConfig>,
     /// The embedding model for workflow intelligence.
     #[serde(default)]
     pub embedder: EmbedderConfig,
@@ -110,6 +114,7 @@ backend = "ollama"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.provider.backend, "ollama");
         assert_eq!(config.provider.model, "llama3.2");
+        assert!(config.providers.is_empty());
         assert_eq!(config.embedder.model, "nomic-embed-text");
         assert_eq!(config.embedder.dimension, 768);
         assert_eq!(config.storage, StorageProfile::Solo);
@@ -168,6 +173,26 @@ model = "llama3.2"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.embedder.model, "nomic-embed-text");
         assert_eq!(config.embedder.dimension, 768);
+    }
+
+    #[test]
+    fn config_deserializes_explicit_provider_entries() {
+        let toml_str = r#"
+[provider]
+backend = "openrouter"
+model = "openai/gpt-oss-20b:free"
+endpoint = "https://openrouter.ai/api/v1"
+api_key_ref = "provider/openrouter/api_key"
+
+[[providers]]
+backend = "openrouter"
+model = "openai/gpt-oss-20b:free"
+endpoint = "https://openrouter.ai/api/v1"
+api_key_ref = "provider/openrouter/api_key"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.providers.len(), 1);
+        assert_eq!(config.providers[0], config.provider);
     }
 
     #[test]

@@ -163,14 +163,17 @@ fn normalize_endpoint(endpoint: &str) -> String {
 }
 
 fn default_config(input: &ProviderInput) -> Config {
+    let provider = ProviderConfig {
+        backend: input.preset_id.clone(),
+        model: input.model.clone(),
+        endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
+        api_key_ref: Some(api_key_ref(&input.preset_id)),
+    };
+
     Config {
         n8n: None,
-        provider: ProviderConfig {
-            backend: input.preset_id.clone(),
-            model: input.model.clone(),
-            endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
-            api_key_ref: Some(api_key_ref(&input.preset_id)),
-        },
+        provider: provider.clone(),
+        providers: vec![provider],
         embedder: Default::default(),
         storage: Default::default(),
         reuse_threshold: DEFAULT_REUSE_THRESHOLD,
@@ -194,7 +197,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "OpenAI".into(),
             description: "Official OpenAI API (GPT-4o, GPT-4.1, and related models).".into(),
             default_endpoint: "https://api.openai.com/v1".into(),
-            default_model: "gpt-4o".into(),
+            default_model: "".into(),
             icon: "openai".into(),
         },
         ProviderPreset {
@@ -202,7 +205,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "Anthropic".into(),
             description: "Claude models via the Anthropic Messages API.".into(),
             default_endpoint: "https://api.anthropic.com/v1".into(),
-            default_model: "claude-sonnet-4-20250514".into(),
+            default_model: "".into(),
             icon: "anthropic".into(),
         },
         ProviderPreset {
@@ -210,7 +213,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "Google Gemini".into(),
             description: "Gemini family through Google AI Studio.".into(),
             default_endpoint: "https://generativelanguage.googleapis.com/v1beta".into(),
-            default_model: "gemini-1.5-flash".into(),
+            default_model: "".into(),
             icon: "google".into(),
         },
         ProviderPreset {
@@ -218,7 +221,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "Ollama".into(),
             description: "Self-hosted models running on your machine.".into(),
             default_endpoint: "http://localhost:11434".into(),
-            default_model: "llama3.2".into(),
+            default_model: "".into(),
             icon: "ollama".into(),
         },
         ProviderPreset {
@@ -226,7 +229,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "OpenCode Go".into(),
             description: "OpenCode Go subscription with OpenAI-compatible endpoints.".into(),
             default_endpoint: "https://opencode.ai/zen/go/v1".into(),
-            default_model: "deepseek-v4-flash".into(),
+            default_model: "".into(),
             icon: "opencode".into(),
         },
         ProviderPreset {
@@ -234,7 +237,7 @@ pub fn provider_presets() -> Vec<ProviderPreset> {
             name: "DeepSeek".into(),
             description: "DeepSeek Chat and reasoner models.".into(),
             default_endpoint: "https://api.deepseek.com/v1".into(),
-            default_model: "deepseek-chat".into(),
+            default_model: "".into(),
             icon: "deepseek".into(),
         },
         ProviderPreset {
@@ -303,6 +306,15 @@ pub async fn save_provider(
         default_config(input)
     };
     config.provider = provider_config_from_input(input);
+    if let Some(existing) = config
+        .providers
+        .iter_mut()
+        .find(|provider| provider.backend == config.provider.backend)
+    {
+        *existing = config.provider.clone();
+    } else {
+        config.providers.push(config.provider.clone());
+    }
 
     write_config(&path, &config)
 }
@@ -538,6 +550,13 @@ mod tests {
     }
 
     #[test]
+    fn provider_presets_do_not_surface_static_default_models() {
+        let presets = provider_presets();
+
+        assert!(presets.iter().all(|preset| preset.default_model.is_empty()));
+    }
+
+    #[test]
     fn normalize_endpoint_accepts_full_chat_completions_url() {
         assert_eq!(
             normalize_endpoint("https://opencode.ai/zen/go/v1/chat/completions"),
@@ -585,6 +604,7 @@ mod tests {
                 endpoint: Some("https://old.test/v1".into()),
                 api_key_ref: Some("provider/openai/api_key".into()),
             },
+            providers: Vec::new(),
             embedder: Default::default(),
             storage: Default::default(),
             reuse_threshold: 0.91,

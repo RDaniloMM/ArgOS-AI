@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use crate::commands::{self, KNOWN_PROVIDERS};
+use crate::commands;
 use crate::composer::CursorPosition;
 use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES, VERSION};
 
@@ -730,10 +730,11 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(inner);
 
-    let provider_items: Vec<ListItem> = KNOWN_PROVIDERS
+    let mut provider_items: Vec<ListItem> = state
+        .configured_providers()
         .iter()
         .enumerate()
-        .map(|(i, kp)| {
+        .map(|(i, provider)| {
             let content = format!(
                 " {}  {:<20}",
                 if i == state.provider_popup.selected_provider
@@ -743,11 +744,23 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 } else {
                     " "
                 },
-                kp.backend
+                provider.backend
             );
             ListItem::new(Span::styled(content, Style::default().fg(C_TEXT)))
         })
         .collect();
+    let add_index = state.provider_popup_add_index();
+    let add_marker = if state.provider_popup.selected_provider == add_index
+        && state.provider_popup.column == PopupColumn::Provider
+    {
+        "▶"
+    } else {
+        " "
+    };
+    provider_items.push(ListItem::new(Span::styled(
+        format!(" {add_marker}  + Add provider"),
+        Style::default().fg(C_ACCENT),
+    )));
     let mut provider_list = ListState::default();
     provider_list.select(Some(state.provider_popup.selected_provider));
     frame.render_stateful_widget(
@@ -771,33 +784,53 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         &mut provider_list,
     );
 
-    let model_items: Vec<ListItem> = KNOWN_PROVIDERS
-        .get(state.provider_popup.selected_provider)
-        .map(|kp| {
-            let dynamic = state.dynamic_models.get(kp.backend);
-            let models: Vec<String> = match dynamic {
-                Some(list) if !list.is_empty() => list.iter().map(|m| m.id.clone()).collect(),
-                _ => kp.models.iter().map(|m| m.to_string()).collect(),
-            };
-            models
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let marker = if i == state.provider_popup.selected_model
-                        && state.provider_popup.column == PopupColumn::Model
-                    {
-                        "▶"
-                    } else {
-                        " "
-                    };
-                    ListItem::new(Span::styled(
-                        format!(" {marker}  {m}"),
-                        Style::default().fg(C_TEXT),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let model_items: Vec<ListItem> = if state.provider_popup_is_add_selected() {
+        vec![
+            ListItem::new(Span::styled(
+                " Press Enter to insert /provider-add",
+                Style::default().fg(C_ACCENT),
+            )),
+            ListItem::new(Span::styled(
+                " Use /provider-add-custom for custom endpoints",
+                Style::default().fg(C_TEXT),
+            )),
+            ListItem::new(Span::styled(
+                " Store secrets with /vault set <ref> <key>",
+                Style::default().fg(C_SUBTLE),
+            )),
+        ]
+    } else if let Some(provider) = state.selected_configured_provider() {
+        let fetched = state.dynamic_models.get(&provider.backend);
+        let models: Vec<String> = match fetched {
+            Some(list) if !list.is_empty() => list.iter().map(|m| m.id.clone()).collect(),
+            _ => vec![format!(
+                "{} (configured, availability unverified)",
+                provider.model
+            )],
+        };
+        models
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let marker = if i == state.provider_popup.selected_model
+                    && state.provider_popup.column == PopupColumn::Model
+                {
+                    "▶"
+                } else {
+                    " "
+                };
+                ListItem::new(Span::styled(
+                    format!(" {marker}  {m}"),
+                    Style::default().fg(C_TEXT),
+                ))
+            })
+            .collect()
+    } else {
+        vec![ListItem::new(Span::styled(
+            " No providers configured. Select + Add provider.",
+            Style::default().fg(C_SUBTLE),
+        ))]
+    };
     let mut model_list = ListState::default();
     model_list.select(Some(state.provider_popup.selected_model));
     frame.render_stateful_widget(

@@ -358,20 +358,14 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             state.provider_popup.selected_provider = 0;
             state.provider_popup.selected_model = 0;
             state.provider_popup.column = PopupColumn::Provider;
-
-            let backend = "openrouter".to_string();
-            let endpoint = "https://openrouter.ai/api/v1".to_string();
-            if !state.dynamic_models.contains_key(&backend) {
+            if state.configured_providers().is_empty() {
                 state.push_activity(
-                    StatusLevel::Loading,
-                    "Fetching models…".to_string(),
-                    "GET openrouter.ai/api/v1/models (free, no auth)".to_string(),
+                    StatusLevel::Missing,
+                    "No configured providers",
+                    "Use Enter on Add provider or /provider-add to configure one.",
                 );
-                return vec![Command::FetchModels {
-                    backend,
-                    endpoint,
-                    api_key_ref: None,
-                }];
+            } else {
+                return maybe_fetch_models(state);
             }
         }
         Action::ShowCommandPalette => {
@@ -396,20 +390,22 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             }
         }
         Action::PopupDown => {
-            let popup = &mut state.provider_popup;
-            if !popup.visible {
+            if !state.provider_popup.visible {
                 return Vec::new();
             }
-            let providers = crate::commands::KNOWN_PROVIDERS;
-            match popup.column {
+            match state.provider_popup.column {
                 PopupColumn::Provider => {
-                    let max = providers.len().saturating_sub(1);
-                    popup.selected_provider = (popup.selected_provider + 1).min(max);
+                    let max = provider_popup_item_count(state).saturating_sub(1);
+                    state.provider_popup.selected_provider =
+                        (state.provider_popup.selected_provider + 1).min(max);
                 }
                 PopupColumn::Model => {
-                    if let Some(kp) = providers.get(popup.selected_provider) {
-                        let max = kp.models.len().saturating_sub(1);
-                        popup.selected_model = (popup.selected_model + 1).min(max);
+                    if let Some(provider) = selected_popup_provider(state) {
+                        let max = models_for_configured_provider(state, &provider)
+                            .len()
+                            .saturating_sub(1);
+                        state.provider_popup.selected_model =
+                            (state.provider_popup.selected_model + 1).min(max);
                     }
                 }
             }
@@ -420,7 +416,7 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             }
         }
         Action::PopupRight => {
-            if state.provider_popup.visible {
+            if state.provider_popup.visible && !state.provider_popup_is_add_selected() {
                 state.provider_popup.column = PopupColumn::Model;
                 state.provider_popup.selected_model = 0;
             }
@@ -430,47 +426,11 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
             if !popup.visible {
                 return Vec::new();
             }
-            let providers = crate::commands::KNOWN_PROVIDERS;
-            if let Some(kp) = providers.get(popup.selected_provider) {
-                let model = if let Some(m) = kp.models.get(popup.selected_model) {
-                    m.to_string()
-                } else {
-                    kp.backend.to_string()
-                };
-                let backend = kp.backend.to_string();
-                state.provider_popup.visible = false;
-
-                let mut config = ensure_config(state);
-                config.provider.backend = backend.clone();
-                config.provider.model = model.clone();
-                if let Some(endpoint) = kp.default_endpoint {
-                    config.provider.endpoint = Some(endpoint.to_string());
-                }
-                if let Some(key_ref) = kp.default_key_ref {
-                    if config.provider.api_key_ref.is_none() {
-                        config.provider.api_key_ref = Some(key_ref.to_string());
-                    }
-                }
-                state.current_config = Some(config.clone());
-
-                let tip = if kp.default_key_ref.is_some() {
-                    format!(
-                        ". Store your API key with `/vault set {} <your-key>`.",
-                        config.provider.api_key_ref.as_deref().unwrap_or("")
-                    )
-                } else {
-                    String::new()
-                };
-                let msg = format!("Switched to {} / {}{tip}", backend, model);
-                state.push_transcript("System", msg.clone(), None);
-                state.flash = Some(FlashMessage {
-                    level: StatusLevel::Loading,
-                    text: msg,
-                });
-                trigger_refresh(state);
-                return vec![Command::SaveConfig {
-                    config: Box::new(config),
-                }];
+            if state.provider_popup_is_add_selected() {
+                return insert_add_provider_template(state);
+            }
+            if let Some(provider) = selected_popup_provider(state) {
+                return select_configured_provider(state, provider);
             }
         }
     }
@@ -530,81 +490,38 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 }
             }
         }
-        Action::MoveDown | Action::ComposerMoveDown => {
-            let popup = &mut state.provider_popup;
-            let providers = commands::KNOWN_PROVIDERS;
-            match popup.column {
-                PopupColumn::Provider => {
-                    let max = providers.len().saturating_sub(1);
-                    popup.selected_provider = (popup.selected_provider + 1).min(max);
-                    return maybe_fetch_models(state);
-                }
-                PopupColumn::Model => {
-                    let backend = providers
-                        .get(popup.selected_provider)
-                        .map(|kp| kp.backend)
-                        .unwrap_or("");
-                    let _ = popup;
-                    let max = get_provider_models(state, backend).len().saturating_sub(1);
-                    state.provider_popup.selected_model =
-                        (state.provider_popup.selected_model + 1).min(max);
-                }
+        Action::MoveDown | Action::ComposerMoveDown => match state.provider_popup.column {
+            PopupColumn::Provider => {
+                let max = provider_popup_item_count(state).saturating_sub(1);
+                state.provider_popup.selected_provider =
+                    (state.provider_popup.selected_provider + 1).min(max);
+                state.provider_popup.selected_model = 0;
+                return maybe_fetch_models(state);
             }
-        }
+            PopupColumn::Model => {
+                let max = selected_popup_provider(state)
+                    .map(|provider| models_for_configured_provider(state, &provider).len())
+                    .unwrap_or(1)
+                    .saturating_sub(1);
+                state.provider_popup.selected_model =
+                    (state.provider_popup.selected_model + 1).min(max);
+            }
+        },
         Action::FocusPrev | Action::ComposerMoveLeft => {
             state.provider_popup.column = PopupColumn::Provider;
         }
         Action::FocusNext | Action::ComposerMoveRight => {
-            state.provider_popup.column = PopupColumn::Model;
-            state.provider_popup.selected_model = 0;
+            if !state.provider_popup_is_add_selected() {
+                state.provider_popup.column = PopupColumn::Model;
+                state.provider_popup.selected_model = 0;
+            }
         }
         Action::SubmitPrompt | Action::RunSelectedWorkflow => {
-            let providers = commands::KNOWN_PROVIDERS;
-            let selected_provider = state.provider_popup.selected_provider;
-            let selected_model = state.provider_popup.selected_model;
-            state.provider_popup.visible = false;
-
-            if let Some(kp) = providers.get(selected_provider) {
-                let models = get_provider_models(state, kp.backend);
-                let model = models
-                    .get(selected_model)
-                    .cloned()
-                    .unwrap_or_else(|| kp.backend.to_string());
-                let backend = kp.backend.to_string();
-                let endpoint = kp.default_endpoint.map(|e| e.to_string());
-                let key_ref = kp.default_key_ref.map(|k| k.to_string());
-
-                let mut config = ensure_config(state);
-                config.provider.backend = backend.clone();
-                config.provider.model = model.clone();
-                if let Some(ref ep) = endpoint {
-                    config.provider.endpoint = Some(ep.clone());
-                }
-                if let Some(ref kr) = key_ref {
-                    if config.provider.api_key_ref.is_none() {
-                        config.provider.api_key_ref = Some(kr.clone());
-                    }
-                }
-                state.current_config = Some(config.clone());
-
-                let tip = if key_ref.is_some() {
-                    format!(
-                        ". Store your API key with `/vault set {} <your-key>`.",
-                        config.provider.api_key_ref.as_deref().unwrap_or("")
-                    )
-                } else {
-                    String::new()
-                };
-                let msg = format!("Switched to {} / {}{tip}", backend, model);
-                state.push_transcript("System", msg.clone(), None);
-                state.flash = Some(FlashMessage {
-                    level: StatusLevel::Loading,
-                    text: msg,
-                });
-                trigger_refresh(state);
-                return vec![Command::SaveConfig {
-                    config: Box::new(config),
-                }];
+            if state.provider_popup_is_add_selected() {
+                return insert_add_provider_template(state);
+            }
+            if let Some(provider) = selected_popup_provider(state) {
+                return select_configured_provider(state, provider);
             }
         }
         Action::Escape => {
@@ -612,6 +529,76 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
         }
         _ => {}
     }
+    Vec::new()
+}
+
+fn provider_popup_item_count(state: &AppState) -> usize {
+    state.configured_providers().len() + 1
+}
+
+fn selected_popup_provider(state: &AppState) -> Option<ProviderConfig> {
+    let mut provider = state.selected_configured_provider()?.clone();
+    let models = models_for_configured_provider(state, &provider);
+    if let Some(model) = models.get(state.provider_popup.selected_model) {
+        provider.model = model.clone();
+    }
+    validate_provider_model(&provider.backend, &provider.model).ok()?;
+    Some(provider)
+}
+
+fn models_for_configured_provider(state: &AppState, provider: &ProviderConfig) -> Vec<String> {
+    let models = get_provider_models(state, &provider.backend);
+    if models.is_empty() {
+        vec![provider.model.clone()]
+    } else {
+        models
+    }
+}
+
+fn select_configured_provider(state: &mut AppState, provider: ProviderConfig) -> Vec<Command> {
+    state.provider_popup.visible = false;
+    let mut config = ensure_config(state);
+    config.provider = provider.clone();
+    upsert_configured_provider(&mut config, provider.clone());
+    state.current_config = Some(config.clone());
+
+    let tip = provider
+        .api_key_ref
+        .as_ref()
+        .map(|key_ref| format!(" Store your API key with `/vault set {key_ref} <your-key>`."))
+        .unwrap_or_default();
+    let msg = format!(
+        "Switched to {} / {}.{tip}",
+        provider.backend, provider.model
+    );
+    state.push_transcript("System", msg.clone(), None);
+    state.flash = Some(FlashMessage {
+        level: StatusLevel::Loading,
+        text: msg,
+    });
+    trigger_refresh(state);
+    vec![Command::SaveConfig {
+        config: Box::new(config),
+    }]
+}
+
+fn insert_add_provider_template(state: &mut AppState) -> Vec<Command> {
+    state.provider_popup.visible = false;
+    state.composer.clear();
+    for ch in "/provider-add ".chars() {
+        state.composer.insert_char(ch);
+    }
+    state.recompute_suggestions();
+    state.focus = FocusPane::Composer;
+    state.push_transcript(
+        "ArgOS",
+        "Add a known provider with `/provider-add <backend> <model> [key-ref] [endpoint]`, or a custom provider with `/provider-add-custom <backend> <endpoint> <model> [key-ref]`. Store raw secrets separately with `/vault set <key-ref> <your-key>`.".to_string(),
+        None,
+    );
+    state.flash = Some(FlashMessage {
+        level: StatusLevel::Success,
+        text: "Provider add command inserted.".into(),
+    });
     Vec::new()
 }
 
@@ -706,35 +693,33 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         }
         ConfigCommand::SetProvider { backend, model } => {
             let mut config = ensure_config(state);
-            config.provider.backend = backend.clone();
-            config.provider.model = model.clone();
-
-            if let Some(kp) = commands::known_provider(&backend) {
-                if let Some(endpoint) = kp.default_endpoint {
-                    config.provider.endpoint = Some(endpoint.to_string());
-                }
-                if let Some(key_ref) = kp.default_key_ref {
-                    if config.provider.api_key_ref.is_none() {
-                        config.provider.api_key_ref = Some(key_ref.to_string());
-                    }
-                }
-            }
-
-            let tip = if let Some(kp) = commands::known_provider(&backend) {
-                if kp.default_key_ref.is_some() {
-                    format!(
-                        ". Store your API key with `/vault set {} <your-key>` then `/refresh`.",
-                        config.provider.api_key_ref.as_deref().unwrap_or("")
-                    )
-                } else {
-                    String::new()
-                }
-            } else {
-                ". Set /endpoint and /key-ref if needed.".into()
+            let Some(mut provider) = configured_provider(&config, &backend).cloned() else {
+                let msg = format!(
+                    "Provider `{backend}` is not configured. Add it with /provider-add or /provider-add-custom first."
+                );
+                state.push_transcript("System", msg.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Missing,
+                    text: msg,
+                });
+                return Vec::new();
             };
 
+            if let Err(message) = validate_provider_model(&provider.backend, &model) {
+                state.push_transcript("System", message.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: message,
+                });
+                return Vec::new();
+            }
+
+            provider.model = model.clone();
+            config.provider = provider.clone();
+            upsert_configured_provider(&mut config, provider);
+
             state.current_config = Some(config.clone());
-            let msg = format!("Provider set to {} / {}{tip}", backend, model);
+            let msg = format!("Provider set to {} / {}.", backend, model);
             state.push_transcript("System", msg.clone(), None);
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Loading,
@@ -745,16 +730,58 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 config: Box::new(config),
             }]
         }
+        ConfigCommand::AddKnownProvider {
+            backend,
+            model,
+            key_ref,
+            endpoint,
+        } => {
+            let fetched_models = get_provider_models(state, &backend);
+            if !fetched_models.is_empty() && !fetched_models.iter().any(|id| id == &model) {
+                let message = format!(
+                    "Model `{model}` was not returned by `{backend}` model discovery. Enter a returned model id or use manual configuration knowing availability is unverified."
+                );
+                state.push_transcript("System", message.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: message,
+                });
+                return Vec::new();
+            }
+
+            match known_provider_config(&backend, &model, key_ref, endpoint) {
+                Ok(provider) => add_provider_entry(state, provider),
+                Err(message) => {
+                    state.push_transcript("System", message.clone(), None);
+                    state.flash = Some(FlashMessage {
+                        level: StatusLevel::Error,
+                        text: message,
+                    });
+                    Vec::new()
+                }
+            }
+        }
+        ConfigCommand::AddCustomProvider {
+            backend,
+            endpoint,
+            model,
+            key_ref,
+        } => match custom_provider_config(&backend, &endpoint, &model, key_ref) {
+            Ok(provider) => add_provider_entry(state, provider),
+            Err(message) => {
+                state.push_transcript("System", message.clone(), None);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: message,
+                });
+                Vec::new()
+            }
+        },
         ConfigCommand::ListProviders => {
-            state.push_transcript("ArgOS", commands::providers_list_text(), None);
-            state.push_transcript(
-                "System",
-                "Use /provider <backend> <model> to switch. It auto-configures endpoint and key ref.".to_string(),
-                None,
-            );
+            state.push_transcript("ArgOS", configured_providers_text(state), None);
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Success,
-                text: "Known providers shown in transcript.".into(),
+                text: "Provider configuration help shown in transcript.".into(),
             });
             Vec::new()
         }
@@ -822,6 +849,7 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         ConfigCommand::SetModel { model } => {
             let mut config = ensure_config(state);
             config.provider.model = model.clone();
+            sync_active_provider_entry(&mut config);
             state.current_config = Some(config.clone());
             let msg = format!("Model set to {}. Refreshing status…", model);
             state.push_transcript("System", msg.clone(), None);
@@ -841,6 +869,7 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
             } else {
                 Some(url.clone())
             };
+            sync_active_provider_entry(&mut config);
             state.current_config = Some(config.clone());
             let msg = format!("Provider endpoint set to {}. Refreshing status…", url);
             state.push_transcript("System", msg.clone(), None);
@@ -860,6 +889,7 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
             } else {
                 Some(key_ref.clone())
             };
+            sync_active_provider_entry(&mut config);
             state.current_config = Some(config.clone());
             let msg = format!("API key reference set to `{}`.", key_ref);
             state.push_transcript("System", msg.clone(), None);
@@ -985,6 +1015,172 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
     }
 }
 
+fn configured_provider<'a>(config: &'a Config, backend: &str) -> Option<&'a ProviderConfig> {
+    config
+        .providers
+        .iter()
+        .find(|provider| provider.backend.eq_ignore_ascii_case(backend))
+}
+
+fn upsert_configured_provider(config: &mut Config, provider: ProviderConfig) {
+    if let Some(existing) = config
+        .providers
+        .iter_mut()
+        .find(|entry| entry.backend.eq_ignore_ascii_case(&provider.backend))
+    {
+        *existing = provider;
+    } else {
+        config.providers.push(provider);
+    }
+}
+
+fn sync_active_provider_entry(config: &mut Config) {
+    if config.provider.backend.trim().is_empty() || config.provider.model.trim().is_empty() {
+        return;
+    }
+    upsert_configured_provider(config, config.provider.clone());
+}
+
+fn known_provider_config(
+    backend: &str,
+    model: &str,
+    key_ref: Option<String>,
+    endpoint: Option<String>,
+) -> Result<ProviderConfig, String> {
+    let backend = backend.trim().to_lowercase();
+    let model = model.trim().to_string();
+    let known = commands::known_provider(&backend).ok_or_else(|| {
+        format!("Unknown provider `{backend}`. Use /provider-add-custom for custom providers.")
+    })?;
+
+    validate_provider_model(&backend, &model)?;
+
+    Ok(ProviderConfig {
+        backend,
+        model,
+        endpoint: endpoint.or_else(|| known.default_endpoint.map(str::to_string)),
+        api_key_ref: key_ref.or_else(|| known.default_key_ref.map(str::to_string)),
+    })
+}
+
+fn custom_provider_config(
+    backend: &str,
+    endpoint: &str,
+    model: &str,
+    key_ref: Option<String>,
+) -> Result<ProviderConfig, String> {
+    let endpoint = endpoint.trim().to_string();
+    Url::parse(&endpoint)
+        .map_err(|err| format!("Invalid provider endpoint `{endpoint}`: {err}"))?;
+
+    let backend = backend.trim().to_lowercase();
+    if backend.is_empty() {
+        return Err("Custom provider backend cannot be empty.".into());
+    }
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("Custom provider model cannot be empty.".into());
+    }
+    if commands::known_provider(&backend).is_some() {
+        validate_provider_model(&backend, &model)?;
+    }
+
+    Ok(ProviderConfig {
+        backend,
+        model,
+        endpoint: Some(endpoint),
+        api_key_ref: key_ref,
+    })
+}
+
+fn validate_provider_model(backend: &str, model: &str) -> Result<(), String> {
+    if backend.eq_ignore_ascii_case("openrouter") {
+        return Ok(());
+    }
+    if is_known_openrouter_catalog_model(model) {
+        return Err(format!(
+            "Model `{model}` looks like an OpenRouter catalog id. Add/select `openrouter` instead of `{backend}`."
+        ));
+    }
+    Ok(())
+}
+
+fn is_known_openrouter_catalog_model(model: &str) -> bool {
+    if let Some((provider_prefix, _)) = model.split_once('/') {
+        if commands::known_provider(provider_prefix).is_some() {
+            return true;
+        }
+    }
+
+    let Some(openrouter) = commands::known_provider("openrouter") else {
+        return false;
+    };
+    openrouter.models.iter().any(|known| *known == model)
+        || (model.contains('/') && model.ends_with(":free"))
+}
+
+fn add_provider_entry(state: &mut AppState, provider: ProviderConfig) -> Vec<Command> {
+    let mut config = ensure_config(state);
+    config.provider = provider.clone();
+    upsert_configured_provider(&mut config, provider.clone());
+    state.current_config = Some(config.clone());
+
+    let tip = provider
+        .api_key_ref
+        .as_ref()
+        .map(|key_ref| format!(" Store the secret with `/vault set {key_ref} <your-key>`; the provider entry stores only the reference."))
+        .unwrap_or_else(|| " No API key reference is configured for this provider.".to_string());
+    let msg = format!(
+        "Added provider {} / {}.{} Model availability is unverified until models are fetched from the provider.",
+        provider.backend, provider.model, tip
+    );
+    state.push_transcript("System", msg.clone(), None);
+    state.flash = Some(FlashMessage {
+        level: StatusLevel::Loading,
+        text: msg,
+    });
+    trigger_refresh(state);
+    vec![Command::SaveConfig {
+        config: Box::new(config),
+    }]
+}
+
+fn configured_providers_text(state: &AppState) -> String {
+    let mut lines = vec!["Configured providers:".to_string(), String::new()];
+    let providers = state.configured_providers();
+    if providers.is_empty() {
+        lines.push("  (none configured yet)".into());
+        lines.push(String::new());
+    } else {
+        for provider in providers {
+            let endpoint = provider.endpoint.as_deref().unwrap_or("(default/none)");
+            let key_ref = provider.api_key_ref.as_deref().unwrap_or("(none)");
+            lines.push(format!("  {} / {}", provider.backend, provider.model));
+            lines.push(format!("    Endpoint: {endpoint}"));
+            lines.push(format!("    API key ref: {key_ref}"));
+            lines.push(String::new());
+        }
+    }
+    lines.push("Add known provider: /provider-add <backend> <model> [key-ref] [endpoint]".into());
+    lines.push(
+        "Add custom provider: /provider-add-custom <backend> <endpoint> <model> [key-ref]".into(),
+    );
+    lines.push("Store secrets separately with /vault set <key-ref> <your-key>.".into());
+    lines.push(String::new());
+    lines.push(commands::providers_list_text());
+    lines.join("\n")
+}
+
+fn normalize_configured_providers(mut config: Config) -> Config {
+    if config.providers.is_empty()
+        && !config.provider.backend.trim().is_empty()
+        && !config.provider.model.trim().is_empty()
+    {
+        config.providers.push(config.provider.clone());
+    }
+    config
+}
+
 fn ensure_config(state: &mut AppState) -> Config {
     state.current_config.clone().unwrap_or_else(|| Config {
         n8n: None,
@@ -994,14 +1190,61 @@ fn ensure_config(state: &mut AppState) -> Config {
             endpoint: None,
             api_key_ref: None,
         },
+        providers: Vec::new(),
         embedder: Default::default(),
         storage: Default::default(),
         reuse_threshold: 0.82,
     })
 }
 
-fn maybe_fetch_models(_state: &AppState) -> Vec<Command> {
-    Vec::new()
+fn maybe_fetch_models(state: &mut AppState) -> Vec<Command> {
+    let Some(provider) = state.selected_configured_provider().cloned() else {
+        return Vec::new();
+    };
+    if state.dynamic_models.contains_key(&provider.backend) {
+        return Vec::new();
+    }
+
+    let endpoint = provider
+        .endpoint
+        .clone()
+        .or_else(|| {
+            commands::known_provider(&provider.backend)
+                .and_then(|known| known.default_endpoint)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if endpoint.is_empty() {
+        state.push_activity(
+            StatusLevel::Missing,
+            format!("Models: {}", provider.backend),
+            "No endpoint configured; model availability cannot be fetched.".to_string(),
+        );
+        return Vec::new();
+    }
+
+    if !provider.backend.eq_ignore_ascii_case("openrouter")
+        && !provider.backend.eq_ignore_ascii_case("ollama")
+        && provider.api_key_ref.is_none()
+    {
+        state.push_activity(
+            StatusLevel::Missing,
+            format!("Models: {}", provider.backend),
+            "No API key reference configured; model availability cannot be fetched.".to_string(),
+        );
+        return Vec::new();
+    }
+
+    let backend = provider.backend.clone();
+    let detail = format!("Loading {backend} models from {endpoint}.");
+    queue_models_fetch(
+        state,
+        &backend,
+        &endpoint,
+        provider.api_key_ref,
+        "Fetching provider models",
+        &detail,
+    )
 }
 
 fn queue_models_fetch(
@@ -1065,9 +1308,7 @@ fn get_provider_models(state: &AppState, backend: &str) -> Vec<String> {
             return dynamic.iter().map(|m| m.id.clone()).collect();
         }
     }
-    commands::known_provider(backend)
-        .map(|kp| kp.models.iter().map(|m| m.to_string()).collect())
-        .unwrap_or_default()
+    Vec::new()
 }
 
 fn trigger_refresh(state: &mut AppState) {
@@ -1198,7 +1439,7 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                     };
                     state.vault_name = snapshot.provider.vault_name;
                     state.workflows = snapshot.n8n.workflows;
-                    state.current_config = snapshot.config;
+                    state.current_config = snapshot.config.map(normalize_configured_providers);
                     state.clamp_selections();
                     state.push_activity(
                         StatusLevel::Success,
@@ -1392,33 +1633,14 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
         },
         AsyncEvent::ModelsFetched { backend, models } => match models {
             Ok(list) => {
-                let is_openrouter = backend.eq_ignore_ascii_case("openrouter");
-                if is_openrouter {
-                    let mut grouped: std::collections::HashMap<
-                        String,
-                        Vec<crate::state::ModelInfo>,
-                    > = std::collections::HashMap::new();
-                    for model in &list {
-                        if let Some((provider, provider_model_id)) = model.id.split_once('/') {
-                            let mut provider_model = model.clone();
-                            provider_model.id = provider_model_id.to_string();
-                            grouped
-                                .entry(provider.to_string())
-                                .or_default()
-                                .push(provider_model);
-                        }
-                    }
-                    grouped.insert(backend.clone(), list.clone());
-                    for (provider, models) in grouped {
-                        state.dynamic_models.insert(provider, models);
-                    }
+                if backend.eq_ignore_ascii_case("openrouter") {
+                    state.dynamic_models.insert(backend.clone(), list);
                     state.push_activity(
                         StatusLevel::Success,
                         "Models: OpenRouter",
                         format!(
-                            "Fetched {} models across {} providers.",
-                            list.len(),
-                            state.dynamic_models.len()
+                            "Fetched {} OpenRouter model ids.",
+                            state.dynamic_models.get(&backend).map_or(0, |v| v.len())
                         ),
                     );
                 } else {
@@ -1556,7 +1778,41 @@ mod tests {
     };
     use crate::state::{AppState, FocusPane, ModelInfo, StatusLevel, WorkflowItem};
     use argos_agent::AgentOutput;
-    use argos_core::{AgentState, N8nRunRef, N8nRunStatus};
+    use argos_core::{AgentState, Config, N8nRunRef, N8nRunStatus, ProviderConfig};
+
+    fn test_config(providers: Vec<ProviderConfig>) -> Config {
+        let provider = providers
+            .first()
+            .cloned()
+            .unwrap_or_else(|| ProviderConfig {
+                backend: String::new(),
+                model: String::new(),
+                endpoint: None,
+                api_key_ref: None,
+            });
+        Config {
+            n8n: None,
+            provider,
+            providers,
+            embedder: Default::default(),
+            storage: Default::default(),
+            reuse_threshold: 0.82,
+        }
+    }
+
+    fn provider(
+        backend: &str,
+        endpoint: Option<&str>,
+        model: &str,
+        key_ref: Option<&str>,
+    ) -> ProviderConfig {
+        ProviderConfig {
+            backend: backend.into(),
+            model: model.into(),
+            endpoint: endpoint.map(str::to_string),
+            api_key_ref: key_ref.map(str::to_string),
+        }
+    }
 
     #[test]
     fn submit_prompt_generates_command_and_clears_composer() {
@@ -1606,7 +1862,9 @@ mod tests {
             .suggestions
             .contains(&"/provider <backend> <model>".to_string()));
         assert!(state.suggestions.contains(&"/providers".to_string()));
-        assert_eq!(state.suggestions.len(), 2);
+        assert!(state
+            .suggestions
+            .contains(&"/provider-add <backend> <model> [key-ref] [endpoint]".to_string()));
     }
 
     #[test]
@@ -1623,6 +1881,214 @@ mod tests {
         handle_action(&mut state, Action::ShowProviderPopup);
         assert!(state.provider_popup.visible);
         assert!(!state.command_palette.visible);
+    }
+
+    #[test]
+    fn provider_popup_uses_configured_providers_only() {
+        let mut state = AppState::new();
+        state.current_config = Some(test_config(vec![
+            provider(
+                "openrouter",
+                Some("https://openrouter.ai/api/v1"),
+                "openai/gpt-4.1",
+                Some("provider/openrouter/api_key"),
+            ),
+            provider(
+                "custom-local",
+                Some("http://localhost:8080/v1"),
+                "local-model",
+                None,
+            ),
+        ]));
+
+        handle_action(&mut state, Action::ShowProviderPopup);
+        handle_action(&mut state, Action::MoveDown);
+        handle_action(&mut state, Action::MoveDown);
+        handle_action(&mut state, Action::MoveDown);
+
+        assert_eq!(state.configured_providers().len(), 2);
+        assert_eq!(state.provider_popup.selected_provider, 2);
+        assert!(state.provider_popup_is_add_selected());
+    }
+
+    #[test]
+    fn no_configured_providers_shows_help_and_add_state() {
+        let mut state = AppState::new();
+
+        handle_action(&mut state, Action::ShowProviderPopup);
+
+        assert!(state.provider_popup.visible);
+        assert!(state.provider_popup_is_add_selected());
+        assert_eq!(state.activity.last().unwrap().level, StatusLevel::Missing);
+
+        handle_action(&mut state, Action::SubmitPrompt);
+
+        assert_eq!(state.composer.to_text(), "/provider-add ");
+        assert!(!state.provider_popup.visible);
+    }
+
+    #[test]
+    fn adding_custom_provider_stores_consistent_entry() {
+        let mut state = AppState::new();
+        for ch in "/provider-add-custom local-ai http://localhost:8080/v1 llama-local provider/local/api_key".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+        let Command::SaveConfig { config } = commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+
+        assert_eq!(config.provider.backend, "local-ai");
+        assert_eq!(
+            config.provider.endpoint.as_deref(),
+            Some("http://localhost:8080/v1")
+        );
+        assert_eq!(config.provider.model, "llama-local");
+        assert_eq!(
+            config.provider.api_key_ref.as_deref(),
+            Some("provider/local/api_key")
+        );
+        assert_eq!(config.providers, vec![config.provider.clone()]);
+    }
+
+    #[test]
+    fn native_provider_models_do_not_fallback_to_static_known_models() {
+        let mut state = AppState::new();
+
+        assert!(get_provider_models(&state, "openai").is_empty());
+
+        handle_async(
+            &mut state,
+            AsyncEvent::ModelsFetched {
+                backend: "openai".into(),
+                models: Err("models endpoint returned 401".into()),
+            },
+        );
+
+        assert!(get_provider_models(&state, "openai").is_empty());
+    }
+
+    #[test]
+    fn native_known_provider_rejects_openrouter_catalog_model_ids() {
+        let mut state = AppState::new();
+        for ch in "/provider-add openai openai/gpt-4.1 provider/openai/api_key".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        assert!(commands.is_empty());
+        assert!(state
+            .transcript
+            .last()
+            .unwrap()
+            .body
+            .contains("looks like an OpenRouter catalog id"));
+    }
+
+    #[test]
+    fn native_known_provider_rejects_future_openrouter_qualified_ids() {
+        let mut state = AppState::new();
+        for ch in "/provider-add openai anthropic/future-model provider/openai/api_key".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        assert!(commands.is_empty());
+        assert!(state
+            .transcript
+            .last()
+            .unwrap()
+            .body
+            .contains("looks like an OpenRouter catalog id"));
+    }
+
+    #[test]
+    fn native_provider_accepts_api_returned_slash_model_ids() {
+        let mut state = AppState::new();
+        state.current_config = Some(test_config(vec![provider(
+            "google",
+            Some("https://generativelanguage.googleapis.com/v1beta"),
+            "models/gemini-2.5-flash",
+            Some("provider/google/api_key"),
+        )]));
+
+        handle_action(&mut state, Action::ShowProviderPopup);
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        let Command::SaveConfig { config } = commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+        assert_eq!(config.provider.backend, "google");
+        assert_eq!(config.provider.model, "models/gemini-2.5-flash");
+        assert_eq!(config.providers, vec![config.provider.clone()]);
+    }
+
+    #[test]
+    fn slash_model_updates_matching_configured_provider_entry() {
+        let mut state = AppState::new();
+        state.current_config = Some(test_config(vec![provider(
+            "openai",
+            Some("https://api.openai.com/v1"),
+            "gpt-4o",
+            Some("provider/openai/api_key"),
+        )]));
+        for ch in "/model gpt-4.1-mini".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        let Command::SaveConfig { config } = commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+        assert_eq!(config.provider.model, "gpt-4.1-mini");
+        assert_eq!(config.providers[0].model, "gpt-4.1-mini");
+    }
+
+    #[test]
+    fn slash_endpoint_and_key_ref_update_matching_configured_provider_entry() {
+        let mut state = AppState::new();
+        state.current_config = Some(test_config(vec![provider(
+            "openai",
+            Some("https://api.openai.com/v1"),
+            "gpt-4o",
+            Some("provider/openai/api_key"),
+        )]));
+        for ch in "/endpoint https://proxy.test/v1".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let endpoint_commands = handle_action(&mut state, Action::SubmitPrompt);
+        let Command::SaveConfig { config } = endpoint_commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+        assert_eq!(
+            config.provider.endpoint.as_deref(),
+            Some("https://proxy.test/v1")
+        );
+        assert_eq!(
+            config.providers[0].endpoint.as_deref(),
+            Some("https://proxy.test/v1")
+        );
+
+        for ch in "/key-ref provider/openai/proxy_key".chars() {
+            state.composer.insert_char(ch);
+        }
+        let key_commands = handle_action(&mut state, Action::SubmitPrompt);
+        let Command::SaveConfig { config } = key_commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+        assert_eq!(
+            config.provider.api_key_ref.as_deref(),
+            Some("provider/openai/proxy_key")
+        );
+        assert_eq!(
+            config.providers[0].api_key_ref.as_deref(),
+            Some("provider/openai/proxy_key")
+        );
     }
 
     #[test]
@@ -1655,7 +2121,7 @@ mod tests {
             get_provider_models(&state, "openrouter"),
             vec!["openai/gpt-4.1"]
         );
-        assert_eq!(get_provider_models(&state, "openai"), vec!["gpt-4.1"]);
+        assert!(get_provider_models(&state, "openai").is_empty());
     }
 
     #[test]

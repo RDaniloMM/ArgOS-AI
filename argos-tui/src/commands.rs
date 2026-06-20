@@ -5,17 +5,51 @@ pub enum ConfigCommand {
     Quit,
     Refresh,
     ShowConfig,
-    SetProvider { backend: String, model: String },
-    SetModel { model: String },
-    SetEndpoint { url: String },
-    SetKeyRef { key_ref: String },
-    SetN8n { url: String },
-    SetN8nMode { mode: String },
-    SetN8nKeyRef { key_ref: String },
-    StoreSecret { key_ref: String, secret: String },
-    DeleteSecret { key_ref: String },
+    SetProvider {
+        backend: String,
+        model: String,
+    },
+    AddKnownProvider {
+        backend: String,
+        model: String,
+        key_ref: Option<String>,
+        endpoint: Option<String>,
+    },
+    AddCustomProvider {
+        backend: String,
+        endpoint: String,
+        model: String,
+        key_ref: Option<String>,
+    },
+    SetModel {
+        model: String,
+    },
+    SetEndpoint {
+        url: String,
+    },
+    SetKeyRef {
+        key_ref: String,
+    },
+    SetN8n {
+        url: String,
+    },
+    SetN8nMode {
+        mode: String,
+    },
+    SetN8nKeyRef {
+        key_ref: String,
+    },
+    StoreSecret {
+        key_ref: String,
+        secret: String,
+    },
+    DeleteSecret {
+        key_ref: String,
+    },
     ListProviders,
-    ChangeDir { path: String },
+    ChangeDir {
+        path: String,
+    },
     ClearSessions,
 }
 
@@ -34,6 +68,8 @@ pub fn parse_slash_command(text: &str) -> Option<ConfigCommand> {
         "config" => Some(ConfigCommand::ShowConfig),
         "providers" => Some(ConfigCommand::ListProviders),
         "provider" => parse_set_provider(args),
+        "provider-add" => parse_add_known_provider(args),
+        "provider-add-custom" => parse_add_custom_provider(args),
         "cd" => Some(ConfigCommand::ChangeDir {
             path: args.trim().to_string(),
         }),
@@ -70,6 +106,43 @@ fn parse_set_provider(args: &str) -> Option<ConfigCommand> {
         backend: parts[0].trim().to_string(),
         model: parts[1].trim().to_string(),
     })
+}
+
+fn parse_add_known_provider(args: &str) -> Option<ConfigCommand> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.len() < 2 || parts.len() > 4 {
+        return None;
+    }
+
+    Some(ConfigCommand::AddKnownProvider {
+        backend: parts[0].trim().to_string(),
+        model: parts[1].trim().to_string(),
+        key_ref: parts.get(2).and_then(|value| optional_ref(value)),
+        endpoint: parts.get(3).map(|value| value.trim().to_string()),
+    })
+}
+
+fn parse_add_custom_provider(args: &str) -> Option<ConfigCommand> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.len() < 3 || parts.len() > 4 {
+        return None;
+    }
+
+    Some(ConfigCommand::AddCustomProvider {
+        backend: parts[0].trim().to_string(),
+        endpoint: parts[1].trim().to_string(),
+        model: parts[2].trim().to_string(),
+        key_ref: parts.get(3).and_then(|value| optional_ref(value)),
+    })
+}
+
+fn optional_ref(value: &&str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn parse_vault_command(args: &str) -> Option<ConfigCommand> {
@@ -113,9 +186,13 @@ Available commands:
   /clear             Clear the transcript
   /quit              Quit ArgOS TUI
   /config            Show current configuration
-  /providers         List known providers and endpoints
+  /providers         List configured providers and add-provider syntax
   /refresh           Refresh provider and optional workflow status
-  /provider <bk> <m> Set provider (auto-configures endpoint + key ref)
+  /provider <bk> <m> Select a configured provider/model
+  /provider-add <bk> <model> [key-ref] [endpoint]
+                      Add a known provider using safe defaults
+  /provider-add-custom <bk> <endpoint> <model> [key-ref]
+                      Add a custom OpenAI-compatible provider
   /model <name>      Change the model
   /endpoint <url>    Change the provider endpoint
   /key-ref <ref>     Set the API key reference
@@ -332,14 +409,13 @@ pub fn known_provider(backend: &str) -> Option<&'static KnownProvider> {
 }
 
 pub fn providers_list_text() -> String {
-    let mut lines = vec!["Known providers:".into(), String::new()];
+    let mut lines = vec!["Known provider defaults:".into(), String::new()];
     for p in KNOWN_PROVIDERS {
         let endpoint = p.default_endpoint.unwrap_or("(none)");
         let key = p.key_description();
-        let models = p.models.join(", ");
         lines.push(format!("  {}  →  {endpoint}", p.backend));
-        lines.push(format!("    Models: {models}"));
         lines.push(format!("    Key ref: {key}"));
+        lines.push("    Models: fetched from the provider when credentials allow it; otherwise enter a model manually.".into());
         lines.push(String::new());
     }
     lines.join("\n")
@@ -377,7 +453,7 @@ const COMMANDS: &[CommandDefinition] = &[
     },
     CommandDefinition {
         signature: "/providers",
-        description: "List known providers and models",
+        description: "List configured providers and add-provider syntax",
         insert_text: "/providers",
     },
     CommandDefinition {
@@ -387,8 +463,18 @@ const COMMANDS: &[CommandDefinition] = &[
     },
     CommandDefinition {
         signature: "/provider <backend> <model>",
-        description: "Set provider (auto-configures endpoint + key ref)",
+        description: "Select a configured provider/model",
         insert_text: "/provider ",
+    },
+    CommandDefinition {
+        signature: "/provider-add <backend> <model> [key-ref] [endpoint]",
+        description: "Add a known provider with safe defaults",
+        insert_text: "/provider-add ",
+    },
+    CommandDefinition {
+        signature: "/provider-add-custom <backend> <endpoint> <model> [key-ref]",
+        description: "Add a custom OpenAI-compatible provider",
+        insert_text: "/provider-add-custom ",
     },
     CommandDefinition {
         signature: "/model <name>",
@@ -614,7 +700,8 @@ mod tests {
         let suggestions = suggest_commands("/pro");
         assert!(suggestions.contains(&"/provider <backend> <model>".to_string()));
         assert!(suggestions.contains(&"/providers".to_string()));
-        assert_eq!(suggestions.len(), 2);
+        assert!(suggestions
+            .contains(&"/provider-add <backend> <model> [key-ref] [endpoint]".to_string()));
     }
 
     #[test]
