@@ -22,16 +22,11 @@ const C_TITLE: Color = Color::White;
 pub fn render(frame: &mut Frame<'_>, state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(10),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(10)])
         .split(frame.area());
 
     render_header(frame, layout[0], state);
     render_body(frame, layout[1], state);
-    render_footer(frame, layout[2], state);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -60,18 +55,12 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 .bg(C_ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" v{VERSION} "), Style::default().fg(C_SUBTLE)),
         Span::raw(" "),
         badge(provider, state.provider_status.level),
         Span::raw(" "),
         badge(n8n, state.n8n_status.level),
         Span::raw(" "),
         spinner_badge(&busy_text, busy_level),
-        Span::raw(" "),
-        Span::styled(
-            state.cwd.display().to_string(),
-            Style::default().fg(C_SUBTLE),
-        ),
     ]);
 
     frame.render_widget(
@@ -84,28 +73,48 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let constraints: Vec<Constraint> = if state.activity_visible {
         vec![
             Constraint::Percentage(28),
+            Constraint::Length(1),
             Constraint::Percentage(44),
+            Constraint::Length(1),
             Constraint::Percentage(28),
         ]
     } else {
-        vec![Constraint::Percentage(32), Constraint::Percentage(68)]
+        vec![
+            Constraint::Percentage(32),
+            Constraint::Length(1),
+            Constraint::Percentage(68),
+        ]
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(area);
 
-    frame.render_widget(
-        Paragraph::new("").block(Block::default().style(Style::default().bg(BG_BASE))),
-        area,
-    );
-
     render_sidebar(frame, columns[0], state);
-    render_center(frame, columns[1], state);
+    // columns[1] is the gap
+    render_center(frame, columns[2], state);
 
     if state.activity_visible {
-        render_activity(frame, columns[2], state);
+        // columns[3] is the gap
+        render_activity(frame, columns[4], state);
     }
+
+    let cwd_text = format!(" {}  v{VERSION} ", state.cwd.display());
+    let cwd_w = (cwd_text.len() as u16).min(area.width.saturating_sub(2));
+    let cwd_rect = Rect {
+        x: area.x + area.width.saturating_sub(cwd_w + 1),
+        y: area.y + area.height.saturating_sub(1),
+        width: cwd_w,
+        height: 1,
+    };
+    frame.render_widget(Clear, cwd_rect);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled(
+            cwd_text,
+            Style::default().fg(Color::Black).bg(C_SUBTLE),
+        )])),
+        cwd_rect,
+    );
 
     if state.provider_popup.visible {
         render_provider_popup(frame, area, state);

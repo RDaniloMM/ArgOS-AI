@@ -970,10 +970,6 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                     state.workflows = snapshot.n8n.workflows;
                     state.current_config = snapshot.config;
                     state.clamp_selections();
-                    state.flash = Some(FlashMessage {
-                        level: StatusLevel::Success,
-                        text: "Status refresh completed.".into(),
-                    });
                     state.push_activity(
                         StatusLevel::Success,
                         "Refresh completed",
