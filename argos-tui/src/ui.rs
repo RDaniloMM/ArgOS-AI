@@ -70,33 +70,62 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let constraints: Vec<Constraint> = if state.activity_visible {
-        vec![
-            Constraint::Percentage(28),
+    let right_visible = state.activity_visible;
+    let left_visible = state.sidebar_visible;
+
+    let constraints: Vec<Constraint> = match (left_visible, right_visible) {
+        (true, true) => vec![
+            Constraint::Percentage(25),
             Constraint::Length(1),
             Constraint::Percentage(44),
             Constraint::Length(1),
-            Constraint::Percentage(28),
-        ]
-    } else {
-        vec![
-            Constraint::Percentage(32),
+            Constraint::Percentage(30),
+        ],
+        (true, false) => vec![
+            Constraint::Percentage(30),
             Constraint::Length(1),
-            Constraint::Percentage(68),
-        ]
+            Constraint::Percentage(70),
+        ],
+        (false, true) => vec![
+            Constraint::Percentage(60),
+            Constraint::Length(1),
+            Constraint::Percentage(40),
+        ],
+        (false, false) => vec![Constraint::Percentage(100)],
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(area);
 
-    render_sidebar(frame, columns[0], state);
-    // columns[1] is the gap
-    render_center(frame, columns[2], state);
+    frame.render_widget(
+        Paragraph::new("").block(Block::default().style(Style::default().bg(BG_BASE))),
+        area,
+    );
 
-    if state.activity_visible {
-        // columns[3] is the gap
-        render_activity(frame, columns[4], state);
+    let mut col_idx = 0;
+    if left_visible {
+        render_sidebar(frame, columns[col_idx], state);
+        col_idx += 2; // skip panel + gap
+    }
+    // center column
+    if left_visible && right_visible {
+        render_center(frame, columns[2], state);
+    } else if left_visible {
+        render_center(frame, columns[2], state);
+    } else if right_visible {
+        render_center(frame, columns[col_idx], state);
+        col_idx += 2;
+    } else {
+        render_center(frame, columns[0], state);
+    }
+
+    if right_visible {
+        if left_visible {
+            render_info_panel(frame, columns[4], state);
+        } else {
+            render_info_panel(frame, columns[col_idx], state);
+        }
     }
 
     let cwd_text = format!(" {}  v{VERSION} ", state.cwd.display());
@@ -355,50 +384,138 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    render_info_panel(frame, area, state);
+}
+
+fn render_info_panel(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(4)])
+        .split(area);
+
+    fill_area(frame, chunks[0], BG_PANEL);
+    fill_area(frame, chunks[1], BG_PANEL);
+
     let is_focused = state.focus == FocusPane::Activity;
+    let title_color = if is_focused { C_ACCENT } else { C_TITLE };
     let title = Line::from(vec![Span::styled(
-        "Activity",
+        "Info",
         Style::default()
-            .fg(if is_focused { C_ACCENT } else { C_TITLE })
+            .fg(title_color)
             .add_modifier(Modifier::BOLD),
     )]);
-    let title_rect = Rect { height: 1, ..area };
-    fill_area(
-        frame,
-        title_rect,
-        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
+    frame.render_widget(
+        Paragraph::new(title),
+        Rect {
+            height: 1,
+            ..chunks[0]
+        },
     );
-    frame.render_widget(Paragraph::new(title), title_rect);
 
-    let inner = Rect {
-        y: area.y + 1,
-        height: area.height.saturating_sub(1),
-        ..area
+    let info_body = Rect {
+        y: chunks[0].y + 1,
+        height: chunks[0].height - 1,
+        ..chunks[0]
     };
+    let mut lines: Vec<Line> = Vec::new();
 
+    if let Some(ref config) = state.current_config {
+        let backend = &config.provider.backend;
+        let model = &config.provider.model;
+        let max_ctx: u64 = if model.contains("claude") {
+            200_000
+        } else {
+            128_000
+        };
+        let pct = if max_ctx > 0 {
+            (state.session_tokens as f64 / max_ctx as f64 * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        let pct_color = if pct > 80.0 {
+            Color::Red
+        } else if pct > 50.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        lines.push(Line::from(vec![Span::styled(
+            format!("{backend} · {model}"),
+            Style::default().fg(C_SUBTLE),
+        )]));
+        lines.push(Line::from(vec![
+            Span::raw(format!(
+                "Tokens: {} / {}  ",
+                stkn(state.session_tokens),
+                stkn(max_ctx)
+            )),
+            Span::styled(format!("{pct:.0}%"), Style::default().fg(pct_color)),
+        ]));
+        lines.push(Line::raw(format!("Cost: ${:.6}", state.session_cost)));
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(vec![Span::styled(
+        format!("{}  v{VERSION}", state.cwd.display()),
+        Style::default().fg(C_SUBTLE),
+    )]));
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true }),
+        info_body,
+    );
+
+    // Activity compact
+    let act_title = vec![Span::styled(
+        "Activity",
+        Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD),
+    )];
+    frame.render_widget(
+        Paragraph::new(Line::from(act_title)),
+        Rect {
+            height: 1,
+            ..chunks[1]
+        },
+    );
+
+    let act_body = Rect {
+        y: chunks[1].y + 1,
+        height: chunks[1].height.saturating_sub(1),
+        ..chunks[1]
+    };
     let items: Vec<ListItem> = state
         .activity
         .iter()
+        .rev()
+        .take(8)
         .map(|entry| {
-            ListItem::new(vec![
-                Line::from(vec![Span::styled(
-                    entry.title.clone(),
-                    focus_style(entry.level).add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(entry.detail.clone()),
-            ])
+            ListItem::new(Line::from(vec![Span::styled(
+                format!("{} {}", focus_icon(entry.level), entry.title),
+                focus_style(entry.level),
+            )]))
         })
         .collect();
     let mut list_state = ListState::default();
-    if !items.is_empty() {
-        list_state.select(Some(state.selected_activity));
+    frame.render_stateful_widget(List::new(items), act_body, &mut list_state);
+}
+
+fn focus_icon(level: StatusLevel) -> &'static str {
+    match level {
+        StatusLevel::Success => "✓",
+        StatusLevel::Error => "✗",
+        StatusLevel::Loading => "○",
+        StatusLevel::Missing => "?",
     }
-    fill_area(frame, inner, BG_PANEL);
-    frame.render_stateful_widget(
-        List::new(items).highlight_style(Style::default().fg(Color::Black).bg(Color::White)),
-        inner,
-        &mut list_state,
-    );
+}
+
+fn stkn(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        format!("{tokens}")
+    }
 }
 
 fn transcript_text(state: &AppState) -> Text<'static> {

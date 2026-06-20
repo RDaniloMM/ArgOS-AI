@@ -192,6 +192,9 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
         Action::ToggleActivity => {
             state.activity_visible = !state.activity_visible;
         }
+        Action::ToggleSidebar => {
+            state.sidebar_visible = !state.sidebar_visible;
+        }
         Action::ComposerInsert(ch) => {
             if state.focus == FocusPane::Composer {
                 state.composer.insert_char(ch);

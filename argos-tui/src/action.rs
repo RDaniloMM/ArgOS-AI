@@ -35,4 +35,5 @@ pub enum Action {
     PopupRight,
     PopupSelect,
     ToggleActivity,
+    ToggleSidebar,
 }
