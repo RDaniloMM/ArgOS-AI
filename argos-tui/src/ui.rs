@@ -401,38 +401,6 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     );
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let text = Line::from(vec![
-        Span::styled(" Tab ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("autocomplete  "),
-        Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("or j/k navigate  "),
-        Span::styled(" Enter ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("ask  "),
-        Span::raw("Shift+Enter newline  "),
-        Span::raw("Shift+Arrows select  "),
-        Span::styled(" F6 ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("workflow  "),
-        Span::styled(" F7 ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("activity  "),
-        Span::styled(" r ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("refresh  "),
-        Span::styled(" Esc×2 ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("cancel  "),
-        Span::styled(" Ctrl+P ", Style::default().fg(Color::Black).bg(C_ACCENT)),
-        Span::raw("providers  "),
-        Span::styled(
-            if state.focus == FocusPane::Composer {
-                " q disabled "
-            } else {
-                " q quit "
-            },
-            Style::default().fg(Color::Black).bg(C_ACCENT),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(text), area);
-}
-
 fn transcript_text(state: &AppState) -> Text<'static> {
     let mut lines = Vec::new();
     for entry in &state.transcript {
