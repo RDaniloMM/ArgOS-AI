@@ -1,0 +1,21 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    FocusNext,
+    FocusPrev,
+    MoveUp,
+    MoveDown,
+    PageUp,
+    PageDown,
+    SubmitPrompt,
+    RunSelectedWorkflow,
+    Refresh,
+    Escape,
+    Quit,
+    ComposerInsert(char),
+    ComposerNewline,
+    ComposerBackspace,
+    ComposerMoveLeft,
+    ComposerMoveRight,
+    ComposerMoveUp,
+    ComposerMoveDown,
+}

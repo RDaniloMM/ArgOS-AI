@@ -1,0 +1,23 @@
+[package]
+name = "argos-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ArgOS terminal UI (Ratatui)"
+
+[dependencies]
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+tokio = { workspace = true }
+async-trait = { workspace = true }
+dirs = "5"
+serde_json = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }
+unicode-width = "0.2"
+argos-core = { path = "../argos-core" }
+argos-agent = { path = "../argos-agent" }
+argos-provider = { path = "../argos-provider", features = ["reqwest-backend"] }
+argos-n8n-connector = { path = "../argos-n8n-connector", features = ["reqwest-backend"] }
+argos-security = { path = "../argos-security", features = ["keyring-backend"] }

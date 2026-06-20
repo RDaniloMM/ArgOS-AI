@@ -37,9 +37,8 @@ fn llm_config() -> OpenAICompatibleConfig {
 }
 
 fn n8n_client() -> ReqwestN8nClient {
-    let api_key = std::env::var("ARGOS_N8N_API_KEY").unwrap_or_else(|_| {
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmZmI1ODAyZS1hMDdhLTRhZWUtYmQyYi1iMmI0ODJmYWZlMWUiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiNjdhMjUwNjMtNzgyZC00OGMyLThjNTMtODIyYmUxZWQxZWM1IiwiaWF0IjoxNzgxODAzNzU2LCJleHAiOjE3OTg3NjE2MDB9.RuLlYe7Q_aJNuvQQLsVY4hCP0JQYVsrcGSs234Onh_w".to_string()
-    });
+    let api_key = std::env::var("ARGOS_N8N_API_KEY")
+        .expect("ARGOS_N8N_API_KEY must be set for real n8n integration tests");
     ReqwestN8nClient::new(Url::parse("http://localhost:5678").unwrap(), Some(api_key))
 }
 

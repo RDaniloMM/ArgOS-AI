@@ -33,10 +33,8 @@ fn n8n_endpoint() -> Url {
 
 /// API key from env var (set during integration test setup).
 fn n8n_api_key() -> String {
-    std::env::var("ARGOS_N8N_API_KEY").unwrap_or_else(|_| {
-        // Fallback: the key generated during this session's n8n setup.
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmZmI1ODAyZS1hMDdhLTRhZWUtYmQyYi1iMmI0ODJmYWZlMWUiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiNjdhMjUwNjMtNzgyZC00OGMyLThjNTMtODIyYmUxZWQxZWM1IiwiaWF0IjoxNzgxODAzNzU2LCJleHAiOjE3OTg3NjE2MDB9.RuLlYe7Q_aJNuvQQLsVY4hCP0JQYVsrcGSs234Onh_w".to_string()
-    })
+    std::env::var("ARGOS_N8N_API_KEY")
+        .expect("ARGOS_N8N_API_KEY must be set for real n8n integration tests")
 }
 
 /// Create a REST client connected to the real n8n instance.
