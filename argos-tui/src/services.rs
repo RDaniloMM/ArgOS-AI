@@ -186,11 +186,8 @@ impl AppServices for RealServices {
         let mut req = client.get(&url);
 
         if let Some(key_ref) = api_key_ref {
-            match retrieve_secret(Some(key_ref)).await {
-                Ok(api_key) => {
-                    req = req.header("Authorization", format!("Bearer {api_key}"));
-                }
-                Err(_) => {}
+            if let Ok(api_key) = retrieve_secret(Some(key_ref)).await {
+                req = req.header("Authorization", format!("Bearer {api_key}"));
             }
         }
 

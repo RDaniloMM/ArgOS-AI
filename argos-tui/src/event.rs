@@ -12,7 +12,7 @@ pub enum Event {
 
 #[derive(Debug)]
 pub enum AsyncEvent {
-    SnapshotLoaded(Result<Snapshot, String>),
+    SnapshotLoaded(Box<Result<Snapshot, String>>),
     InputError(String),
     PromptCompleted {
         prompt: String,

@@ -1346,7 +1346,7 @@ mod tests {
 
         handle_async(
             &mut state,
-            AsyncEvent::SnapshotLoaded(Ok(Snapshot {
+            AsyncEvent::SnapshotLoaded(Box::new(Ok(Snapshot {
                 provider: ProviderSnapshot {
                     level: StatusLevel::Success,
                     title: "Provider".into(),
