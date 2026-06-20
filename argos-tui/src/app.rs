@@ -931,7 +931,7 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
     match event {
         AsyncEvent::SnapshotLoaded(result) => {
             state.is_loading_snapshot = false;
-            match result {
+            match *result {
                 Ok(snapshot) => {
                     state.provider_status = ResourceStatus {
                         level: snapshot.provider.level,
