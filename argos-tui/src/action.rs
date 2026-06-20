@@ -36,4 +36,5 @@ pub enum Action {
     PopupSelect,
     ToggleActivity,
     ToggleSidebar,
+    CopySelection,
 }

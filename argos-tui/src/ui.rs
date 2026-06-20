@@ -12,7 +12,6 @@ use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES
 const BG_BASE: Color = Color::Black;
 const BG_PANEL: Color = Color::DarkGray;
 const BG_WORKFLOWS: Color = Color::Rgb(55, 55, 65);
-const BG_TRANSCRIPT: Color = Color::Rgb(32, 34, 40);
 const BG_COMPOSER: Color = Color::Rgb(44, 47, 55);
 const BG_HIGHLIGHT: Color = Color::Gray;
 const C_ACCENT: Color = Color::Cyan;
@@ -302,7 +301,6 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         height: chunks[0].height.saturating_sub(1),
         ..chunks[0]
     };
-    fill_area(frame, transcript_body, BG_TRANSCRIPT);
     frame.render_widget(
         Paragraph::new(transcript_text(state))
             .scroll((state.transcript_scroll, 0))

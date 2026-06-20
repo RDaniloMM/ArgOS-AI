@@ -19,6 +19,7 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::F(6) => Some(Action::RunSelectedWorkflow),
         KeyCode::F(7) => Some(Action::ToggleActivity),
         KeyCode::F(8) => Some(Action::ToggleSidebar),
+        KeyCode::Char('c') if ctrl && shift => Some(Action::CopySelection),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
         KeyCode::Home if focus == FocusPane::Composer && shift => Some(Action::ComposerSelectHome),

@@ -195,6 +195,25 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
         Action::ToggleSidebar => {
             state.sidebar_visible = !state.sidebar_visible;
         }
+        Action::CopySelection => {
+            if let Some((start, end)) = state.composer.selection() {
+                let text = composer_selection_text(&state.composer, start, end);
+                copy_to_clipboard(&text);
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Success,
+                    text: "Copied selection to clipboard.".into(),
+                });
+            } else {
+                let text = state.composer.to_text();
+                if !text.is_empty() {
+                    copy_to_clipboard(&text);
+                    state.flash = Some(FlashMessage {
+                        level: StatusLevel::Success,
+                        text: "Copied composer to clipboard.".into(),
+                    });
+                }
+            }
+        }
         Action::ComposerInsert(ch) => {
             if state.focus == FocusPane::Composer {
                 state.composer.insert_char(ch);
