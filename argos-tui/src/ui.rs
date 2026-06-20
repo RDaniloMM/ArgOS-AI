@@ -11,7 +11,9 @@ use crate::state::{AppState, FocusPane, PopupColumn, StatusLevel, SPINNER_FRAMES
 
 const BG_BASE: Color = Color::Black;
 const BG_PANEL: Color = Color::DarkGray;
-const BG_COMPOSER: Color = Color::Rgb(60, 64, 72);
+const BG_WORKFLOWS: Color = Color::Rgb(55, 55, 65);
+const BG_TRANSCRIPT: Color = Color::Rgb(32, 34, 40);
+const BG_COMPOSER: Color = Color::Rgb(44, 47, 55);
 const BG_HIGHLIGHT: Color = Color::Gray;
 const C_ACCENT: Color = Color::Cyan;
 const C_SUBTLE: Color = Color::Gray;
@@ -199,6 +201,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         height: chunks[1].height.saturating_sub(1),
         ..chunks[1]
     };
+    fill_area(frame, list_area, BG_WORKFLOWS);
 
     if state.workflows.is_empty() {
         frame.render_widget(
@@ -245,26 +248,23 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .fg(if tf { C_ACCENT } else { C_TITLE })
             .add_modifier(Modifier::BOLD),
     )]);
-    frame.render_widget(
-        Paragraph::new(transcript_title).block(Block::default().style(Style::default().bg(
-            if state.focus == FocusPane::Transcript {
-                BG_HIGHLIGHT
-            } else {
-                BG_PANEL
-            },
-        ))),
-        Rect {
-            height: 1,
-            ..chunks[0]
-        },
+    let t_title_rect = Rect {
+        height: 1,
+        ..chunks[0]
+    };
+    fill_area(
+        frame,
+        t_title_rect,
+        if tf { BG_HIGHLIGHT } else { BG_PANEL },
     );
+    frame.render_widget(Paragraph::new(transcript_title), t_title_rect);
 
     let transcript_body = Rect {
         y: chunks[0].y + 1,
         height: chunks[0].height.saturating_sub(1),
         ..chunks[0]
     };
-    fill_area(frame, transcript_body, BG_PANEL);
+    fill_area(frame, transcript_body, BG_TRANSCRIPT);
     frame.render_widget(
         Paragraph::new(transcript_text(state))
             .scroll((state.transcript_scroll, 0))
@@ -304,19 +304,16 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         Span::styled(composer_status(state), Style::default().fg(C_SUBTLE)),
     ]);
     let is_focused = state.focus == FocusPane::Composer;
-    frame.render_widget(
-        Paragraph::new(composer_title).block(Block::default().style(Style::default().bg(
-            if is_focused {
-                BG_HIGHLIGHT
-            } else {
-                BG_COMPOSER
-            },
-        ))),
-        Rect {
-            height: 1,
-            ..composer_area
-        },
+    let c_title_rect = Rect {
+        height: 1,
+        ..composer_area
+    };
+    fill_area(
+        frame,
+        c_title_rect,
+        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
     );
+    frame.render_widget(Paragraph::new(composer_title), c_title_rect);
 
     let inner = Rect {
         y: composer_area.y + 1,
