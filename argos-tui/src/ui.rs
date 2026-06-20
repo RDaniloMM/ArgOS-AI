@@ -381,10 +381,6 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    render_info_panel(frame, area, state);
-}
-
 fn render_info_panel(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
