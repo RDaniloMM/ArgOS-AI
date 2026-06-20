@@ -186,7 +186,13 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         },
         if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
     );
-    frame.render_widget(Paragraph::new(Line::from(title)), Rect { height: 1, ..chunks[1] });
+    frame.render_widget(
+        Paragraph::new(Line::from(title)),
+        Rect {
+            height: 1,
+            ..chunks[1]
+        },
+    );
 
     let list_area = Rect {
         y: chunks[1].y + 1,
@@ -351,7 +357,11 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .add_modifier(Modifier::BOLD),
     )]);
     let title_rect = Rect { height: 1, ..area };
-    fill_area(frame, title_rect, if is_focused { BG_HIGHLIGHT } else { BG_PANEL });
+    fill_area(
+        frame,
+        title_rect,
+        if is_focused { BG_HIGHLIGHT } else { BG_PANEL },
+    );
     frame.render_widget(Paragraph::new(title), title_rect);
 
     let inner = Rect {
@@ -439,11 +449,10 @@ fn transcript_text(state: &AppState) -> Text<'static> {
 }
 
 fn fill_area(frame: &mut Frame<'_>, area: Rect, color: Color) {
-    frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(color)),
-        area,
-    );
+    frame.render_widget(Paragraph::new("").style(Style::default().bg(color)), area);
 }
+
+fn line_with_label(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{label}: "),
