@@ -127,23 +127,6 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         }
     }
 
-    let cwd_text = format!(" {}  v{VERSION} ", state.cwd.display());
-    let cwd_w = (cwd_text.len() as u16).min(area.width.saturating_sub(2));
-    let cwd_rect = Rect {
-        x: area.x + area.width.saturating_sub(cwd_w + 1),
-        y: area.y + area.height.saturating_sub(1),
-        width: cwd_w,
-        height: 1,
-    };
-    frame.render_widget(Clear, cwd_rect);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            cwd_text,
-            Style::default().fg(Color::Black).bg(C_SUBTLE),
-        )])),
-        cwd_rect,
-    );
-
     if state.provider_popup.visible {
         render_provider_popup(frame, area, state);
     }
@@ -312,9 +295,9 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let composer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(if has_suggestions {
-            vec![Constraint::Length(1), Constraint::Min(3)]
+            vec![Constraint::Length(1), Constraint::Min(5)]
         } else {
-            vec![Constraint::Min(4)]
+            vec![Constraint::Min(6)]
         })
         .split(chunks[1]);
 
