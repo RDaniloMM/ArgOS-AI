@@ -152,11 +152,9 @@ fn dispatch_commands(
         let tx = tx.clone();
         tokio::spawn(async move {
             let event = match command {
-                Command::LoadSnapshot => {
-                    Event::Async(AsyncEvent::SnapshotLoaded(Box::new(
-                        services.load_snapshot().await,
-                    )))
-                }
+                Command::LoadSnapshot => Event::Async(AsyncEvent::SnapshotLoaded(Box::new(
+                    services.load_snapshot().await,
+                ))),
                 Command::SubmitPrompt { prompt } => Event::Async(AsyncEvent::PromptCompleted {
                     prompt: prompt.clone(),
                     result: services.submit_prompt(prompt).await,
