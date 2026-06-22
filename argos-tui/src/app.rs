@@ -1446,7 +1446,7 @@ fn provider_auth_tip(provider: &ProviderConfig) -> String {
             format!(" Run `/openai-login {token_ref}` to authorize ChatGPT/OpenAI OAuth; config stores only this token reference.")
         }
         ProviderAuthMethod::Codex => {
-            let token_ref = provider
+            let _token_ref = provider
                 .oauth_token_ref
                 .as_deref()
                 .unwrap_or("provider/codex/oauth");

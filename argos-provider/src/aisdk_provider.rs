@@ -13,6 +13,31 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// Endpoint for Codex OAuth (ChatGPT Pro/Plus) — the only API endpoint that
+/// accepts OpenAI OAuth tokens. Standard `https://api.openai.com/v1` rejects
+/// OAuth JWTs from auth.openai.com.
+const CODEX_API_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
+
+/// Extract the `chatgpt_account_id` from an OpenAI OAuth JWT.
+///
+/// The JWT payload contains a custom claim at `https://api.openai.com/auth`
+/// with a `chatgpt_account_id` field. Returns `None` if the token is not a
+/// valid JWT or the claim is absent.
+fn extract_chatgpt_account_id(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    // Decode the base64url-encoded payload (no signature verification needed).
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .ok()?;
+    let payload: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let auth = payload.pointer("/https://api.openai.com/auth")?;
+    Some(auth.get("chatgpt_account_id")?.as_str()?.to_string())
+}
+
 use crate::provider::{
     Completion, CompletionOptions, FinishReason, Provider, ProviderCapabilities, TokenUsage,
 };
@@ -44,6 +69,9 @@ pub struct AisdkProvider {
     endpoint: Url,
     /// Model name used for completions and embeddings.
     model: String,
+    /// When true, force Responses API via Codex endpoint with OAuth-specific
+    /// headers. Set by [`Self::new_openai_codex`].
+    is_codex_oauth: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -116,13 +144,30 @@ fn responses_url(endpoint: &Url) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
+#[serde(untagged)]
+enum InputValue {
+    Messages(Vec<ResponsesInputMessage>),
+}
+
+#[derive(Serialize)]
 struct ResponsesRequest {
     model: String,
-    input: Vec<ResponsesInputMessage>,
+    input: InputValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    store: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<usize>,
-    temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    /// Codex endpoint requires `stream: true`; standard Responses API omits it.
+    #[serde(skip_serializing_if = "is_false")]
     stream: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 #[derive(Serialize)]
@@ -184,6 +229,7 @@ impl AisdkProvider {
             reqwest: reqwest::Client::new(),
             endpoint,
             model,
+            is_codex_oauth: false,
         }
     }
 
@@ -207,11 +253,26 @@ impl AisdkProvider {
             reqwest: reqwest::Client::new(),
             endpoint,
             model,
+            is_codex_oauth: false,
         }
+    }
+
+    /// Create a new provider for the Codex OAuth endpoint (ChatGPT Pro/Plus).
+    ///
+    /// This is identical to [`Self::new_openai`] except `is_codex_oauth` is set
+    /// to `true`, which forces the Responses API code path with Codex-specific
+    /// headers and endpoint override.
+    pub fn new_openai_codex(endpoint: Url, api_key: String, model: String) -> Self {
+        let mut p = Self::new_openai(endpoint, api_key, model);
+        p.is_codex_oauth = true;
+        p
     }
 
     /// Determine which wire API to use (Responses vs Chat Completions).
     fn api_style(&self) -> ApiStyle {
+        if self.is_codex_oauth {
+            return ApiStyle::Responses;
+        }
         api_style(&self.endpoint, &self.model)
     }
 
@@ -256,88 +317,261 @@ impl AisdkProvider {
     }
 
     /// Responses API path using manual reqwest POST (body shape mismatch with aisdk).
+    ///
+    /// For the Codex OAuth path (`is_codex_oauth`), this handles SSE streaming
+    /// because the Codex endpoint requires `stream: true`.
     async fn complete_responses(
         &self,
         prompt: &str,
         options: &CompletionOptions,
     ) -> Result<Completion> {
-        let mut input = Vec::new();
-
-        if let Some(sys) = &options.system_prompt {
-            input.push(ResponsesInputMessage {
-                role: "system".into(),
-                content: sys.clone(),
-            });
+        // Both Codex and standard Responses use array input format.
+        let mut messages = Vec::new();
+        if !self.is_codex_oauth {
+            if let Some(sys) = &options.system_prompt {
+                messages.push(ResponsesInputMessage {
+                    role: "system".into(),
+                    content: sys.clone(),
+                });
+            }
         }
-
-        input.push(ResponsesInputMessage {
+        messages.push(ResponsesInputMessage {
             role: "user".into(),
             content: prompt.to_string(),
         });
 
+        let instructions = if self.is_codex_oauth {
+            // Codex endpoint requires instructions to be present and non-empty.
+            Some(
+                options
+                    .system_prompt
+                    .clone()
+                    .unwrap_or_else(|| "You are a helpful assistant.".into()),
+            )
+        } else {
+            None
+        };
+
         let req = ResponsesRequest {
             model: self.model.clone(),
-            input,
-            max_output_tokens: options.max_tokens,
-            temperature: options.temperature,
-            stream: false,
+            input: InputValue::Messages(messages),
+            instructions,
+            store: if self.is_codex_oauth { Some(false) } else { None },
+            // Codex gpt-5.5 rejects max_output_tokens as unsupported.
+            max_output_tokens: if self.is_codex_oauth {
+                None
+            } else {
+                options.max_tokens
+            },
+            temperature: if self.is_codex_oauth {
+                None
+            } else {
+                Some(options.temperature)
+            },
+            stream: self.is_codex_oauth,
         };
 
         let body = serde_json::to_string(&req).map_err(|e| {
             ArgosError::Provider(format!("failed to serialize responses request: {e}"))
         })?;
 
-        let url = responses_url(&self.endpoint);
-        let resp = self
+        let url = if self.is_codex_oauth {
+            CODEX_API_ENDPOINT.to_string()
+        } else {
+            responses_url(&self.endpoint)
+        };
+
+        let mut req_builder = self
             .reqwest
             .post(&url)
             .header(
                 "Authorization",
                 format!("Bearer {}", &self.inner.settings.api_key),
             )
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        if self.is_codex_oauth {
+            req_builder = req_builder
+                .header("OpenAI-Beta", "responses=experimental")
+                .header("originator", "codex_cli_rs")
+                .header("session_id", uuid::Uuid::new_v4().to_string());
+
+            // Extract chatgpt-account-id from the JWT payload if possible.
+            if let Some(account_id) = extract_chatgpt_account_id(&self.inner.settings.api_key) {
+                req_builder = req_builder.header("ChatGPT-Account-Id", account_id);
+            }
+        }
+
+        let resp = req_builder
             .body(body)
             .send()
             .await
             .map_err(|e| ArgosError::Provider(format!("request to {url} failed: {e}")))?;
 
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| {
-            ArgosError::Provider(format!("failed to read response from {url}: {e}"))
-        })?;
-
         if !status.is_success() {
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "(no body)".into());
             return Err(ArgosError::Provider(format!(
                 "API POST {url} returned {status}: {text}"
             )));
         }
 
-        let response: ResponsesResponse = serde_json::from_str(&text).map_err(|e| {
-            ArgosError::Provider(format!(
-                "failed to parse responses response: {e}; body: {text}"
-            ))
-        })?;
+        if self.is_codex_oauth {
+            // Codex returns SSE streaming — read and accumulate text deltas.
+            Self::read_codex_stream(resp).await
+        } else {
+            // Standard Responses API returns a single JSON body.
+            let text = resp.text().await.map_err(|e| {
+                ArgosError::Provider(format!("failed to read response from {url}: {e}"))
+            })?;
 
-        let content = response.output_text.unwrap_or_else(|| {
-            response
-                .output
-                .iter()
-                .flat_map(|item| item.content.iter())
-                .filter_map(|content| content.text.as_deref())
-                .collect::<Vec<_>>()
-                .join("")
-        });
+            let response: ResponsesResponse = serde_json::from_str(&text).map_err(|e| {
+                ArgosError::Provider(format!(
+                    "failed to parse responses response: {e}; body: {text}"
+                ))
+            })?;
 
-        let usage = response.usage.unwrap_or(ResponsesUsage {
-            input_tokens: 0,
-            output_tokens: 0,
-        });
+            let content = response.output_text.unwrap_or_else(|| {
+                response
+                    .output
+                    .iter()
+                    .flat_map(|item| item.content.iter())
+                    .filter_map(|content| content.text.as_deref())
+                    .collect::<Vec<_>>()
+                    .join("")
+            });
+
+            let usage = response.usage.unwrap_or(ResponsesUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+            });
+
+            Ok(Completion {
+                text: content,
+                usage: TokenUsage {
+                    prompt_tokens: usage.input_tokens,
+                    completion_tokens: usage.output_tokens,
+                },
+                finish_reason: FinishReason::Stop,
+            })
+        }
+    }
+
+    /// Read a Codex SSE streaming response and accumulate the output text.
+    ///
+    /// The Codex endpoint sends [Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+    /// with `data: {...}` lines. We parse each event to extract delta/text fields
+    /// until the terminal `data: [DONE]` event.
+    async fn read_codex_stream(mut resp: reqwest::Response) -> Result<Completion> {
+        let mut output = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
+
+        loop {
+            let chunk = match resp.chunk().await {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => break, // stream closed without [DONE] — still valid
+                Err(e) => {
+                    return Err(ArgosError::Provider(format!(
+                        "failed to read codex stream chunk: {e}"
+                    )));
+                }
+            };
+
+            buffer.extend_from_slice(&chunk);
+
+            // Process complete SSE events (separated by \n\n)
+            loop {
+                // Find next \n\n boundary
+                let event_end = match buffer
+                    .windows(2)
+                    .position(|w| w == b"\n\n")
+                {
+                    Some(pos) => pos,
+                    None => break, // wait for more data
+                };
+
+                let event_bytes = buffer[..event_end].to_vec();
+                buffer = buffer[event_end + 2..].to_vec();
+
+                let event_str = String::from_utf8_lossy(&event_bytes);
+
+                // Parse each "data: ..." line in the event
+                for line in event_str.lines() {
+                    let line = line.trim();
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        let data = data.trim();
+                        if data == "[DONE]" {
+                            return Ok(Completion {
+                                text: output,
+                                usage: TokenUsage {
+                                    prompt_tokens: 0,
+                                    completion_tokens: 0,
+                                },
+                                finish_reason: FinishReason::Stop,
+                            });
+                        }
+
+                        // Try to extract text from the SSE JSON payload
+                        if let Ok(json) =
+                            serde_json::from_str::<serde_json::Value>(data)
+                        {
+                            // "delta" — streaming text delta events
+                            if let Some(delta) =
+                                json.get("delta").and_then(|v| v.as_str())
+                            {
+                                output.push_str(delta);
+                            }
+                            // "output_text" — done/final events
+                            if let Some(text) =
+                                json.get("output_text").and_then(|v| v.as_str())
+                            {
+                                output.push_str(text);
+                            }
+                            // "content" array (from response.done events)
+                            if let Some(content) =
+                                json.get("content").and_then(|v| v.as_array())
+                            {
+                                for item in content {
+                                    if let Some(text) =
+                                        item.get("text").and_then(|v| v.as_str())
+                                    {
+                                        output.push_str(text);
+                                    }
+                                }
+                            }
+                            // "output"[].content[].text (from response.done events)
+                            if let Some(output_arr) =
+                                json.get("output").and_then(|v| v.as_array())
+                            {
+                                for item in output_arr {
+                                    if let Some(content) = item
+                                        .get("content")
+                                        .and_then(|v| v.as_array())
+                                    {
+                                        for c in content {
+                                            if let Some(text) =
+                                                c.get("text").and_then(|v| v.as_str())
+                                            {
+                                                output.push_str(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(Completion {
-            text: content,
+            text: output,
             usage: TokenUsage {
-                prompt_tokens: usage.input_tokens,
-                completion_tokens: usage.output_tokens,
+                prompt_tokens: 0,
+                completion_tokens: 0,
             },
             finish_reason: FinishReason::Stop,
         })

@@ -420,6 +420,15 @@ async fn build_provider_from_config(
     }
 
     let api_key = provider_bearer_token(config, &backend).await?;
+
+    if config.auth_method == ProviderAuthMethod::Codex {
+        return Ok(Arc::new(AisdkProvider::new_openai_codex(
+            endpoint,
+            api_key,
+            config.model.clone(),
+        )));
+    }
+
     Ok(Arc::new(AisdkProvider::new_openai(
         endpoint,
         api_key,

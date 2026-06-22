@@ -13,7 +13,14 @@
 # sqlite-vec index databases (regenerable via `argos reindex`)
 *.index.db
 
-# Gentle AI skill registry\n.atl/
+# Gentle AI skill registry
+.atl/
+
+# Node.js dependencies (Playwright E2E tests)
+node_modules/
+
+# Codex OAuth E2E — token cache (sensitive, regenerable)
+tests/codex-e2e/.last-token*
 
 # Graphify output (knowledge graph)
 graphify-out/

@@ -300,12 +300,14 @@ dependencies = [
  "aisdk",
  "argos-core",
  "async-trait",
+ "base64 0.22.1",
  "httpmock",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
