@@ -20,6 +20,7 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::F(7) => Some(Action::ToggleActivity),
         KeyCode::F(8) => Some(Action::ToggleSidebar),
         KeyCode::F(2) => Some(Action::ShowProviderPopup),
+        KeyCode::F(3) => Some(Action::CodexLogin),
         KeyCode::Char('c') if ctrl && shift => Some(Action::CopySelection),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
@@ -71,6 +72,7 @@ pub fn map_key(key: KeyEvent, focus: FocusPane) -> Option<Action> {
         KeyCode::Enter if focus == FocusPane::Composer && shift => Some(Action::ComposerNewline),
         KeyCode::Enter if focus == FocusPane::Composer => Some(Action::SubmitPrompt),
         KeyCode::Backspace if focus == FocusPane::Composer => Some(Action::ComposerBackspace),
+        KeyCode::Delete => Some(Action::PopupDelete),
         KeyCode::Char(ch) if focus == FocusPane::Composer && is_plain_text(key.modifiers) => {
             Some(Action::ComposerInsert(ch))
         }

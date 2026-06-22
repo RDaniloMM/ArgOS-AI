@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::services::{PromptResult, Snapshot, WorkflowRunResult};
+use crate::services::{OpenAiLoginStart, PromptResult, Snapshot, WorkflowRunResult};
 use crate::state::ModelInfo;
 
 #[derive(Debug)]
@@ -32,6 +32,17 @@ pub enum AsyncEvent {
     },
     SecretDeleted {
         key_ref: String,
+        result: Result<(), String>,
+    },
+    OpenAiLoginStarted {
+        token_ref: String,
+        result: Result<OpenAiLoginStart, String>,
+    },
+    OpenAiLoginCompleted {
+        token_ref: String,
+        result: Result<(), String>,
+    },
+    CodexLoginCompleted {
         result: Result<(), String>,
     },
     ModelsFetched {

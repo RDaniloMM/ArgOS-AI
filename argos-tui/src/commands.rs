@@ -15,6 +15,14 @@ pub enum ConfigCommand {
         key_ref: Option<String>,
         endpoint: Option<String>,
     },
+    AddOpenAiOAuthProvider {
+        model: String,
+        token_ref: Option<String>,
+    },
+    OpenAiLogin {
+        token_ref: Option<String>,
+    },
+    CodexLogin,
     AddCustomProvider {
         backend: String,
         endpoint: String,
@@ -47,6 +55,9 @@ pub enum ConfigCommand {
         key_ref: String,
     },
     ListProviders,
+    RemoveProvider {
+        backend: String,
+    },
     ChangeDir {
         path: String,
     },
@@ -68,8 +79,13 @@ pub fn parse_slash_command(text: &str) -> Option<ConfigCommand> {
         "config" => Some(ConfigCommand::ShowConfig),
         "providers" => Some(ConfigCommand::ListProviders),
         "provider" => parse_set_provider(args),
+        "openai-login" => parse_openai_login(args),
+        "codex-login" => Some(ConfigCommand::CodexLogin),
+        "provider-login" => parse_provider_login(args),
         "provider-add" => parse_add_known_provider(args),
+        "provider-add-openai-oauth" => parse_add_openai_oauth_provider(args),
         "provider-add-custom" => parse_add_custom_provider(args),
+        "provider-remove" => parse_remove_provider(args),
         "cd" => Some(ConfigCommand::ChangeDir {
             path: args.trim().to_string(),
         }),
@@ -95,6 +111,40 @@ pub fn parse_slash_command(text: &str) -> Option<ConfigCommand> {
         "vault" => parse_vault_command(args),
         _ => None,
     }
+}
+
+fn parse_openai_login(args: &str) -> Option<ConfigCommand> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.len() > 1 {
+        return None;
+    }
+
+    Some(ConfigCommand::OpenAiLogin {
+        token_ref: parts.first().and_then(|value| optional_ref(value)),
+    })
+}
+
+fn parse_provider_login(args: &str) -> Option<ConfigCommand> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() || parts.len() > 2 || !parts[0].eq_ignore_ascii_case("openai") {
+        return None;
+    }
+
+    Some(ConfigCommand::OpenAiLogin {
+        token_ref: parts.get(1).and_then(|value| optional_ref(value)),
+    })
+}
+
+fn parse_add_openai_oauth_provider(args: &str) -> Option<ConfigCommand> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() || parts.len() > 2 {
+        return None;
+    }
+
+    Some(ConfigCommand::AddOpenAiOAuthProvider {
+        model: parts[0].trim().to_string(),
+        token_ref: parts.get(1).and_then(|value| optional_ref(value)),
+    })
 }
 
 fn parse_set_provider(args: &str) -> Option<ConfigCommand> {
@@ -133,6 +183,16 @@ fn parse_add_custom_provider(args: &str) -> Option<ConfigCommand> {
         endpoint: parts[1].trim().to_string(),
         model: parts[2].trim().to_string(),
         key_ref: parts.get(3).and_then(|value| optional_ref(value)),
+    })
+}
+
+fn parse_remove_provider(args: &str) -> Option<ConfigCommand> {
+    let backend = args.trim();
+    if backend.is_empty() {
+        return None;
+    }
+    Some(ConfigCommand::RemoveProvider {
+        backend: backend.to_string(),
     })
 }
 
@@ -189,10 +249,19 @@ Available commands:
   /providers         List configured providers and add-provider syntax
   /refresh           Refresh provider and optional workflow status
   /provider <bk> <m> Select a configured provider/model
+  /codex-login        Login with ChatGPT Plus/Pro (Codex backend for GPT-5 models)
+  /openai-login [token-ref]
+                      Start OpenAI ChatGPT OAuth device login
+  /provider-login openai [token-ref]
+                      Alias for OpenAI OAuth login
   /provider-add <bk> <model> [key-ref] [endpoint]
                       Add a known provider using safe defaults
+  /provider-add-openai-oauth <model> [token-ref]
+                      Add OpenAI ChatGPT OAuth and start login
   /provider-add-custom <bk> <endpoint> <model> [key-ref]
                       Add a custom OpenAI-compatible provider
+  /provider-remove <bk>
+                      Remove a configured provider
   /model <name>      Change the model
   /endpoint <url>    Change the provider endpoint
   /key-ref <ref>     Set the API key reference
@@ -400,6 +469,13 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
             output_per_mtok: 0.60,
         }),
     },
+    KnownProvider {
+        backend: "codex",
+        default_endpoint: Some("https://chatgpt.com/backend-api"),
+        default_key_ref: None,
+        models: &["gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5.0", "gpt-4.1", "o4-mini", "o3"],
+        pricing: None,
+    },
 ];
 
 pub fn known_provider(backend: &str) -> Option<&'static KnownProvider> {
@@ -467,9 +543,29 @@ const COMMANDS: &[CommandDefinition] = &[
         insert_text: "/provider ",
     },
     CommandDefinition {
+        signature: "/codex-login",
+        description: "Login with ChatGPT Plus/Pro for Codex access",
+        insert_text: "/codex-login ",
+    },
+    CommandDefinition {
+        signature: "/openai-login [token-ref]",
+        description: "Start OpenAI ChatGPT OAuth device login",
+        insert_text: "/openai-login ",
+    },
+    CommandDefinition {
+        signature: "/provider-login openai [token-ref]",
+        description: "Start provider OAuth login for OpenAI",
+        insert_text: "/provider-login openai ",
+    },
+    CommandDefinition {
         signature: "/provider-add <backend> <model> [key-ref] [endpoint]",
         description: "Add a known provider with safe defaults",
         insert_text: "/provider-add ",
+    },
+    CommandDefinition {
+        signature: "/provider-add-openai-oauth <model> [token-ref]",
+        description: "Add OpenAI ChatGPT OAuth provider and start login",
+        insert_text: "/provider-add-openai-oauth gpt-4.1 ",
     },
     CommandDefinition {
         signature: "/provider-add-custom <backend> <endpoint> <model> [key-ref]",
@@ -674,6 +770,34 @@ mod tests {
     }
 
     #[test]
+    fn openai_oauth_provider_add_parses() {
+        assert_eq!(
+            parse_slash_command("/provider-add-openai-oauth gpt-4.1 provider/openai/oauth"),
+            Some(ConfigCommand::AddOpenAiOAuthProvider {
+                model: "gpt-4.1".into(),
+                token_ref: Some("provider/openai/oauth".into())
+            })
+        );
+    }
+
+    #[test]
+    fn openai_login_parses() {
+        assert_eq!(
+            parse_slash_command("/openai-login provider/openai/oauth"),
+            Some(ConfigCommand::OpenAiLogin {
+                token_ref: Some("provider/openai/oauth".into())
+            })
+        );
+        assert_eq!(
+            parse_slash_command("/provider-login openai provider/openai/oauth"),
+            Some(ConfigCommand::OpenAiLogin {
+                token_ref: Some("provider/openai/oauth".into())
+            })
+        );
+        assert_eq!(parse_slash_command("/provider-login openrouter x"), None);
+    }
+
+    #[test]
     fn vault_remove_parses() {
         assert_eq!(
             parse_slash_command("/vault remove openai"),
@@ -702,6 +826,9 @@ mod tests {
         assert!(suggestions.contains(&"/providers".to_string()));
         assert!(suggestions
             .contains(&"/provider-add <backend> <model> [key-ref] [endpoint]".to_string()));
+        assert!(suggestions.contains(&"/provider-add-openai-oauth <model> [token-ref]".to_string()));
+        assert!(suggestions.contains(&"/provider-login openai [token-ref]".to_string()));
+        assert!(suggest_commands("/open").contains(&"/openai-login [token-ref]".to_string()));
     }
 
     #[test]

@@ -12,3 +12,8 @@
 
 # sqlite-vec index databases (regenerable via `argos reindex`)
 *.index.db
+
+# Gentle AI skill registry\n.atl/
+
+# Graphify output (knowledge graph)
+graphify-out/

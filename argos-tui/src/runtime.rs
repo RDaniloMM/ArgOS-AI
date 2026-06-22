@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use crate::app::{handle_action, handle_async, startup_commands, Command};
 use crate::event::{AsyncEvent, Event};
 use crate::keymap::map_key;
-use crate::services::{AppServices, RealServices};
+use crate::services::{start_codex_login, AppServices, RealServices};
 use crate::state::AppState;
 use crate::ui;
 
@@ -188,14 +188,40 @@ fn dispatch_commands(
                     key_ref: key_ref.clone(),
                     result: services.delete_secret(&key_ref).await,
                 }),
+                Command::StartOpenAiLogin { token_ref } => {
+                    Event::Async(AsyncEvent::OpenAiLoginStarted {
+                        token_ref: token_ref.clone(),
+                        result: services.start_openai_login(&token_ref).await,
+                    })
+                }
+                Command::CompleteOpenAiLogin { login } => {
+                    let token_ref = login.token_ref.clone();
+                    Event::Async(AsyncEvent::OpenAiLoginCompleted {
+                        token_ref,
+                        result: services.complete_openai_login(login).await,
+                    })
+                }
+                Command::StartCodexLogin => {
+                    Event::Async(AsyncEvent::CodexLoginCompleted {
+                        result: start_codex_login().await,
+                    })
+                }
                 Command::FetchModels {
                     backend,
                     endpoint,
                     api_key_ref,
+                    auth_method,
+                    oauth_token_ref,
                 } => Event::Async(AsyncEvent::ModelsFetched {
                     backend: backend.clone(),
                     models: services
-                        .fetch_models(&backend, &endpoint, api_key_ref.as_deref())
+                        .fetch_models(
+                            &backend,
+                            &endpoint,
+                            api_key_ref.as_deref(),
+                            auth_method,
+                            oauth_token_ref.as_deref(),
+                        )
                         .await,
                 }),
             };

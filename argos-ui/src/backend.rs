@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use argos_agent::{Agent, GenericAgent, ToolRegistry};
-use argos_core::{ArgosError, Config, N8nConnection, N8nRunRef, N8nWorkflowRef, ProviderConfig};
+use argos_core::{
+    ArgosError, Config, N8nConnection, N8nRunRef, N8nWorkflowRef, ProviderAuthMethod,
+    ProviderConfig,
+};
 use argos_n8n_connector::{N8nConnector, ReqwestN8nClient};
 use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
 use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
@@ -168,6 +171,8 @@ fn default_config(input: &ProviderInput) -> Config {
         model: input.model.clone(),
         endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
         api_key_ref: Some(api_key_ref(&input.preset_id)),
+        auth_method: ProviderAuthMethod::ApiKey,
+        oauth_token_ref: None,
     };
 
     Config {
@@ -186,6 +191,8 @@ fn provider_config_from_input(input: &ProviderInput) -> ProviderConfig {
         model: input.model.clone(),
         endpoint: Some(normalize_endpoint(&input.endpoint)).filter(|s| !s.is_empty()),
         api_key_ref: Some(api_key_ref(&input.preset_id)),
+        auth_method: ProviderAuthMethod::ApiKey,
+        oauth_token_ref: None,
     }
 }
 
@@ -603,6 +610,8 @@ mod tests {
                 model: "old".into(),
                 endpoint: Some("https://old.test/v1".into()),
                 api_key_ref: Some("provider/openai/api_key".into()),
+                auth_method: ProviderAuthMethod::ApiKey,
+                oauth_token_ref: None,
             },
             providers: Vec::new(),
             embedder: Default::default(),

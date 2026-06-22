@@ -35,7 +35,9 @@ pub enum Action {
     PopupLeft,
     PopupRight,
     PopupSelect,
+    PopupDelete,
     ToggleActivity,
     ToggleSidebar,
     CopySelection,
+    CodexLogin,
 }

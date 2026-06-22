@@ -139,6 +139,7 @@ pub struct AppState {
     pub selected_workflow: usize,
     pub transcript: Vec<TranscriptEntry>,
     pub transcript_scroll: u16,
+    pub transcript_follow: bool,
     pub composer: ComposerBuffer,
     pub activity: Vec<ActivityEntry>,
     pub selected_activity: usize,
@@ -186,6 +187,7 @@ impl AppState {
             selected_workflow: 0,
             transcript: Vec::new(),
             transcript_scroll: 0,
+            transcript_follow: true,
             composer: ComposerBuffer::new(),
             activity: Vec::new(),
             selected_activity: 0,
@@ -256,6 +258,10 @@ impl AppState {
     }
 
     pub fn scroll_transcript_lines(&mut self, delta: i16) {
+        self.transcript_follow = false;
+        if self.transcript_scroll == u16::MAX {
+            self.transcript_scroll = self.transcript_line_count().saturating_sub(1) as u16;
+        }
         if delta.is_negative() {
             self.transcript_scroll = self.transcript_scroll.saturating_sub(delta.unsigned_abs());
         } else {
@@ -264,10 +270,18 @@ impl AppState {
     }
 
     pub fn page_transcript_up(&mut self) {
+        self.transcript_follow = false;
+        if self.transcript_scroll == u16::MAX {
+            self.transcript_scroll = self.transcript_line_count().saturating_sub(1) as u16;
+        }
         self.transcript_scroll = self.transcript_scroll.saturating_sub(PAGE_SIZE);
     }
 
     pub fn page_transcript_down(&mut self) {
+        self.transcript_follow = false;
+        if self.transcript_scroll == u16::MAX {
+            self.transcript_scroll = self.transcript_line_count().saturating_sub(1) as u16;
+        }
         self.transcript_scroll = self.transcript_scroll.saturating_add(PAGE_SIZE);
     }
 
@@ -296,7 +310,9 @@ impl AppState {
             body: body.into(),
             meta,
         });
-        self.transcript_scroll = self.transcript_line_count().saturating_sub(1) as u16;
+        if self.transcript_follow {
+            self.transcript_scroll = u16::MAX;
+        }
     }
 
     pub fn clamp_selections(&mut self) {

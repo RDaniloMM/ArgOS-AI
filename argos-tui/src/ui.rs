@@ -187,13 +187,25 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 
     if let Some(flash) = &state.flash {
-        let width = (flash.text.len() + 4).min(area.width as usize - 2) as u16;
-        let height = 1;
+        let label = flash.level.label();
+        let text = format!(" {} {}", label, flash.text);
+        let max_text_w = area.width.saturating_sub(4).min(72).max(20) as usize;
+        let chars_per_line = max_text_w.saturating_sub(4);
+        let lines = if text.len() <= chars_per_line {
+            1
+        } else {
+            let wrapped = text.len().div_ceil(chars_per_line.max(1));
+            wrapped.min(8)
+        };
+        let pad = 1u16;
+        let box_w = (text.len() + 4).min(max_text_w) as u16;
+        let inner_h = lines as u16;
+        let box_h = inner_h + pad * 2;
         let toast = Rect {
-            x: area.x + area.width.saturating_sub(width + 2),
-            y: area.y + area.height.saturating_sub(2),
-            width,
-            height,
+            x: area.x + area.width.saturating_sub(box_w + 1),
+            y: area.y + area.height.saturating_sub(box_h + 1),
+            width: box_w,
+            height: box_h,
         };
         let bg = match flash.level {
             StatusLevel::Success => Color::DarkGray,
@@ -203,20 +215,24 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         };
         frame.render_widget(Clear, toast);
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!(" {} ", flash.level.label()),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(bg)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    flash.text.clone(),
-                    Style::default().fg(Color::White).bg(Color::DarkGray),
-                ),
-            ])),
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(bg))
+                .style(Style::default().bg(Color::Black)),
             toast,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                text,
+                Style::default().fg(Color::White).bg(Color::Black),
+            )))
+            .wrap(Wrap { trim: true }),
+            Rect {
+                x: toast.x + pad,
+                y: toast.y + pad,
+                width: box_w.saturating_sub(pad * 2),
+                height: inner_h,
+            },
         );
     }
 }
@@ -290,13 +306,18 @@ fn render_center(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .split(area);
 
     let tf = state.focus == FocusPane::Transcript;
-    let transcript_block = panel_block("Transcript", tf);
+    let transcript_block = panel_block(transcript_panel_title(), tf);
     let transcript_body = transcript_block.inner(chunks[0]);
     frame.render_widget(transcript_block, chunks[0]);
+
+    let content_lines = state.transcript_line_count() as u16;
+    let view_height = transcript_body.height.max(1);
+    let max_scroll = content_lines.saturating_sub(view_height);
+    let scroll = state.transcript_scroll.min(max_scroll);
     frame.render_widget(
         Paragraph::new(transcript_text(state))
             .style(Style::default().fg(C_TEXT).bg(BG_PANEL_ALT))
-            .scroll((state.transcript_scroll, 0))
+            .scroll((scroll, 0))
             .wrap(Wrap { trim: false }),
         transcript_body,
     );
@@ -433,6 +454,10 @@ fn transcript_text(state: &AppState) -> Text<'static> {
         lines.push(Line::raw(""));
     }
     Text::from(lines)
+}
+
+fn transcript_panel_title() -> &'static str {
+    ""
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -718,7 +743,7 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Provider & model  ← → columns  ↑↓ navigate  Enter select  Esc close")
+        .title("Provider & model  ← → columns  ↑↓ navigate  Enter select  Del remove  Esc close")
         .title_style(Style::default().fg(C_TITLE).add_modifier(Modifier::BOLD))
         .border_style(Style::default().fg(C_ACCENT_2))
         .style(Style::default().fg(C_TEXT).bg(BG_POPUP));
@@ -768,7 +793,7 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Provider")
+                    .title(" Provider — Del to remove ")
                     .border_style(Style::default().fg(C_BORDER))
                     .style(Style::default().bg(BG_POPUP)),
             )
@@ -791,11 +816,11 @@ fn render_provider_popup(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 Style::default().fg(C_ACCENT),
             )),
             ListItem::new(Span::styled(
-                " Use /provider-add-custom for custom endpoints",
+                " OpenAI: API key or /provider-add-openai-oauth",
                 Style::default().fg(C_TEXT),
             )),
             ListItem::new(Span::styled(
-                " Store secrets with /vault set <ref> <key>",
+                " Custom endpoints: /provider-add-custom",
                 Style::default().fg(C_SUBTLE),
             )),
         ]
@@ -928,7 +953,7 @@ fn render_command_palette(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 mod tests {
     use super::{
         composer_cursor_position, composer_line, display_width_up_to_col, suggestions_popup_area,
-        transcript_text,
+        transcript_panel_title, transcript_text,
     };
     use crate::composer::CursorPosition;
     use crate::state::AppState;
@@ -1031,5 +1056,10 @@ mod tests {
         assert!(!rendered.contains("ArgOS:"));
         assert!(rendered.contains("hello"));
         assert!(rendered.contains("hi"));
+    }
+
+    #[test]
+    fn transcript_panel_title_is_blank() {
+        assert_eq!(transcript_panel_title(), "");
     }
 }

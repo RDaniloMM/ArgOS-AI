@@ -3,14 +3,16 @@ use crate::commands::{self, ConfigCommand};
 use crate::event::AsyncEvent;
 use crate::state::{AppState, FlashMessage, FocusPane, PopupColumn, ResourceStatus, StatusLevel};
 use argos_core::{
-    Config, ConnMode, N8nConnection, N8nRunRef, N8nRunStatus, ProviderConfig, ToolInvocation,
-    ToolResult,
+    Config, ConnMode, N8nConnection, N8nRunRef, N8nRunStatus, ProviderAuthMethod, ProviderConfig,
+    ToolInvocation, ToolResult,
 };
 use serde_json::Value;
 use url::Url;
 
 const STARTUP_MODELS_BACKEND: &str = "openrouter";
 const STARTUP_MODELS_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+const DEFAULT_OPENAI_OAUTH_TOKEN_REF: &str = "provider/openai/oauth";
+const DEFAULT_CODEX_TOKEN_REF: &str = "provider/codex/oauth";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -32,10 +34,19 @@ pub enum Command {
     DeleteSecret {
         key_ref: String,
     },
+    StartOpenAiLogin {
+        token_ref: String,
+    },
+    CompleteOpenAiLogin {
+        login: crate::services::OpenAiLoginStart,
+    },
+    StartCodexLogin,
     FetchModels {
         backend: String,
         endpoint: String,
         api_key_ref: Option<String>,
+        auth_method: ProviderAuthMethod,
+        oauth_token_ref: Option<String>,
     },
 }
 
@@ -46,6 +57,8 @@ pub fn startup_commands(state: &mut AppState) -> Vec<Command> {
         STARTUP_MODELS_BACKEND,
         STARTUP_MODELS_ENDPOINT,
         None,
+        ProviderAuthMethod::ApiKey,
+        None,
         "Fetching provider models",
         "Loading OpenRouter model catalog for provider/model pickers.",
     ));
@@ -53,6 +66,13 @@ pub fn startup_commands(state: &mut AppState) -> Vec<Command> {
 }
 
 pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
+    // Auto-dismiss completed flash messages on any action
+    if let Some(flash) = &state.flash {
+        if matches!(flash.level, StatusLevel::Success | StatusLevel::Error) {
+            state.flash = None;
+        }
+    }
+
     if state.provider_popup.visible {
         return handle_popup_action(state, action);
     }
@@ -433,6 +453,14 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                 return select_configured_provider(state, provider);
             }
         }
+        Action::PopupDelete => {}
+        Action::CodexLogin => {
+            state.flash = Some(FlashMessage {
+                level: StatusLevel::Loading,
+                text: "Opening browser for Codex login…".into(),
+            });
+            return vec![Command::StartCodexLogin];
+        }
     }
 
     Vec::new()
@@ -527,6 +555,32 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
         Action::Escape => {
             state.provider_popup.visible = false;
         }
+        Action::PopupDelete => {
+            if state.provider_popup_is_add_selected() {
+                return Vec::new();
+            }
+            let backend = state
+                .configured_providers()
+                .get(state.provider_popup.selected_provider)
+                .map(|p| p.backend.clone());
+            let Some(backend) = backend else {
+                return Vec::new();
+            };
+            remove_configured_provider(state, &backend);
+            state.provider_popup.visible = false;
+            state.push_transcript(
+                "System",
+                format!("Removed provider `{backend}`."),
+                None,
+            );
+            state.flash = Some(FlashMessage {
+                level: StatusLevel::Success,
+                text: format!("Removed provider `{backend}`."),
+            });
+            return vec![Command::SaveConfig {
+                config: Box::new(ensure_config(state)),
+            }];
+        }
         _ => {}
     }
     Vec::new()
@@ -562,11 +616,7 @@ fn select_configured_provider(state: &mut AppState, provider: ProviderConfig) ->
     upsert_configured_provider(&mut config, provider.clone());
     state.current_config = Some(config.clone());
 
-    let tip = provider
-        .api_key_ref
-        .as_ref()
-        .map(|key_ref| format!(" Store your API key with `/vault set {key_ref} <your-key>`."))
-        .unwrap_or_default();
+    let tip = provider_auth_tip(&provider);
     let msg = format!(
         "Switched to {} / {}.{tip}",
         provider.backend, provider.model
@@ -592,7 +642,7 @@ fn insert_add_provider_template(state: &mut AppState) -> Vec<Command> {
     state.focus = FocusPane::Composer;
     state.push_transcript(
         "ArgOS",
-        "Add a known provider with `/provider-add <backend> <model> [key-ref] [endpoint]`, or a custom provider with `/provider-add-custom <backend> <endpoint> <model> [key-ref]`. Store raw secrets separately with `/vault set <key-ref> <your-key>`.".to_string(),
+        "Add OpenAI with `/provider-add openai <model> [key-ref]` for API keys or `/provider-add-openai-oauth <model> [token-ref]` for ChatGPT OAuth. Custom OpenAI-compatible providers use `/provider-add-custom <backend> <endpoint> <model> [key-ref]`. Store raw secrets separately with `/vault set <ref> <secret>`.".to_string(),
         None,
     );
     state.flash = Some(FlashMessage {
@@ -646,6 +696,7 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
         ConfigCommand::ClearTranscript => {
             state.transcript.clear();
             state.transcript_scroll = 0;
+            state.transcript_follow = true;
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Success,
                 text: "Transcript cleared.".into(),
@@ -761,6 +812,73 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 }
             }
         }
+        ConfigCommand::AddOpenAiOAuthProvider { model, token_ref } => {
+            let login_ref = token_ref
+                .as_deref()
+                .map(|token_ref| normalize_openai_oauth_ref(Some(token_ref)))
+                .unwrap_or_else(|| DEFAULT_OPENAI_OAUTH_TOKEN_REF.to_string());
+            match openai_oauth_provider_config(&model, token_ref) {
+                Ok(provider) => {
+                    let mut commands = add_provider_entry(state, provider);
+                    state.push_transcript(
+                        "System",
+                        format!("Starting OpenAI OAuth login for `{login_ref}`. No tokens will be printed."),
+                        None,
+                    );
+                    commands.push(Command::StartOpenAiLogin {
+                        token_ref: login_ref,
+                    });
+                    commands
+                }
+                Err(message) => {
+                    state.push_transcript("System", message.clone(), None);
+                    state.flash = Some(FlashMessage {
+                        level: StatusLevel::Error,
+                        text: message,
+                    });
+                    Vec::new()
+                }
+            }
+        }
+        ConfigCommand::OpenAiLogin { token_ref } => {
+            let token_ref = match crate::services::validate_openai_oauth_ref(
+                &normalize_openai_oauth_ref(token_ref.as_deref()),
+            ) {
+                Ok(token_ref) => token_ref,
+                Err(message) => {
+                    state.push_transcript("System", message.clone(), None);
+                    state.flash = Some(FlashMessage {
+                        level: StatusLevel::Error,
+                        text: message,
+                    });
+                    return Vec::new();
+                }
+            };
+            state.push_transcript(
+                "System",
+                format!(
+                    "Starting OpenAI OAuth login for `{token_ref}`. No tokens will be printed."
+                ),
+                None,
+            );
+            state.push_activity(
+                StatusLevel::Loading,
+                "OpenAI OAuth login",
+                "Requesting a device login code from OpenAI.",
+            );
+            state.flash = Some(FlashMessage {
+                level: StatusLevel::Loading,
+                text: "Starting OpenAI OAuth login…".into(),
+            });
+            vec![Command::StartOpenAiLogin { token_ref }]
+        }
+        ConfigCommand::CodexLogin => {
+            state.flash = Some(FlashMessage {
+                level: StatusLevel::Loading,
+                text: "Opening browser for Codex login…".into(),
+            });
+            vec![Command::StartCodexLogin]
+        }
         ConfigCommand::AddCustomProvider {
             backend,
             endpoint,
@@ -784,6 +902,13 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
                 text: "Provider configuration help shown in transcript.".into(),
             });
             Vec::new()
+        }
+        ConfigCommand::RemoveProvider { backend } => {
+            remove_configured_provider(state, &backend);
+            state.push_transcript("System", format!("Removed provider `{backend}`."), None);
+            vec![Command::SaveConfig {
+                config: Box::new(ensure_config(state)),
+            }]
         }
         ConfigCommand::ChangeDir { path } => {
             let new_cwd = if path.is_empty() {
@@ -889,6 +1014,8 @@ fn handle_slash_command(state: &mut AppState, cmd: ConfigCommand) -> Vec<Command
             } else {
                 Some(key_ref.clone())
             };
+            config.provider.auth_method = ProviderAuthMethod::ApiKey;
+            config.provider.oauth_token_ref = None;
             sync_active_provider_entry(&mut config);
             state.current_config = Some(config.clone());
             let msg = format!("API key reference set to `{}`.", key_ref);
@@ -1034,6 +1161,78 @@ fn upsert_configured_provider(config: &mut Config, provider: ProviderConfig) {
     }
 }
 
+fn remove_configured_provider(state: &mut AppState, backend: &str) {
+    let mut config = ensure_config(state);
+    config
+        .providers
+        .retain(|p| !p.backend.eq_ignore_ascii_case(backend));
+    if config.provider.backend.eq_ignore_ascii_case(backend) {
+        if let Some(first) = config.providers.first().cloned() {
+            config.provider = first;
+        } else {
+            config.provider = ProviderConfig {
+                backend: String::new(),
+                model: String::new(),
+                endpoint: None,
+                api_key_ref: None,
+                auth_method: ProviderAuthMethod::ApiKey,
+                oauth_token_ref: None,
+            };
+        }
+    }
+    state.current_config = Some(config);
+}
+
+fn ensure_openai_oauth_provider(state: &mut AppState, token_ref: &str) {
+    let model = state
+        .current_config
+        .as_ref()
+        .map(|c| c.provider.model.clone())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "gpt-4.1".to_string());
+
+    let provider = ProviderConfig {
+        backend: "openai".to_string(),
+        model,
+        endpoint: commands::known_provider("openai")
+            .and_then(|p| p.default_endpoint)
+            .map(str::to_string),
+        api_key_ref: None,
+        auth_method: ProviderAuthMethod::OpenAiOAuth,
+        oauth_token_ref: Some(token_ref.to_string()),
+    };
+
+    let mut config = ensure_config(state);
+    upsert_configured_provider(&mut config, provider.clone());
+    config.provider = provider;
+    state.current_config = Some(config);
+}
+
+fn ensure_codex_provider(state: &mut AppState) {
+    let model = state
+        .current_config
+        .as_ref()
+        .map(|c| c.provider.model.clone())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "gpt-5.4".to_string());
+
+    const CODEX_ENDPOINT: &str = "https://chatgpt.com/backend-api";
+
+    let provider = ProviderConfig {
+        backend: "codex".to_string(),
+        model,
+        endpoint: Some(CODEX_ENDPOINT.to_string()),
+        api_key_ref: None,
+        auth_method: ProviderAuthMethod::Codex,
+        oauth_token_ref: Some(DEFAULT_CODEX_TOKEN_REF.to_string()),
+    };
+
+    let mut config = ensure_config(state);
+    upsert_configured_provider(&mut config, provider.clone());
+    config.provider = provider;
+    state.current_config = Some(config);
+}
+
 fn sync_active_provider_entry(config: &mut Config) {
     if config.provider.backend.trim().is_empty() || config.provider.model.trim().is_empty() {
         return;
@@ -1060,6 +1259,33 @@ fn known_provider_config(
         model,
         endpoint: endpoint.or_else(|| known.default_endpoint.map(str::to_string)),
         api_key_ref: key_ref.or_else(|| known.default_key_ref.map(str::to_string)),
+        auth_method: ProviderAuthMethod::ApiKey,
+        oauth_token_ref: None,
+    })
+}
+
+fn openai_oauth_provider_config(
+    model: &str,
+    token_ref: Option<String>,
+) -> Result<ProviderConfig, String> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("OpenAI OAuth provider model cannot be empty.".into());
+    }
+    validate_provider_model("openai", &model)?;
+    let oauth_token_ref = crate::services::validate_openai_oauth_ref(&normalize_openai_oauth_ref(
+        token_ref.as_deref(),
+    ))?;
+
+    Ok(ProviderConfig {
+        backend: "openai".into(),
+        model,
+        endpoint: commands::known_provider("openai")
+            .and_then(|known| known.default_endpoint)
+            .map(str::to_string),
+        api_key_ref: None,
+        auth_method: ProviderAuthMethod::OpenAiOAuth,
+        oauth_token_ref: Some(oauth_token_ref),
     })
 }
 
@@ -1090,6 +1316,8 @@ fn custom_provider_config(
         model,
         endpoint: Some(endpoint),
         api_key_ref: key_ref,
+        auth_method: ProviderAuthMethod::ApiKey,
+        oauth_token_ref: None,
     })
 }
 
@@ -1125,11 +1353,7 @@ fn add_provider_entry(state: &mut AppState, provider: ProviderConfig) -> Vec<Com
     upsert_configured_provider(&mut config, provider.clone());
     state.current_config = Some(config.clone());
 
-    let tip = provider
-        .api_key_ref
-        .as_ref()
-        .map(|key_ref| format!(" Store the secret with `/vault set {key_ref} <your-key>`; the provider entry stores only the reference."))
-        .unwrap_or_else(|| " No API key reference is configured for this provider.".to_string());
+    let tip = provider_auth_tip(&provider);
     let msg = format!(
         "Added provider {} / {}.{} Model availability is unverified until models are fetched from the provider.",
         provider.backend, provider.model, tip
@@ -1155,13 +1379,17 @@ fn configured_providers_text(state: &AppState) -> String {
         for provider in providers {
             let endpoint = provider.endpoint.as_deref().unwrap_or("(default/none)");
             let key_ref = provider.api_key_ref.as_deref().unwrap_or("(none)");
+            let oauth_ref = provider.oauth_token_ref.as_deref().unwrap_or("(none)");
             lines.push(format!("  {} / {}", provider.backend, provider.model));
             lines.push(format!("    Endpoint: {endpoint}"));
+            lines.push(format!("    Auth: {}", provider_auth_label(provider)));
             lines.push(format!("    API key ref: {key_ref}"));
+            lines.push(format!("    OAuth token ref: {oauth_ref}"));
             lines.push(String::new());
         }
     }
     lines.push("Add known provider: /provider-add <backend> <model> [key-ref] [endpoint]".into());
+    lines.push("Add OpenAI OAuth provider: /provider-add-openai-oauth <model> [token-ref]".into());
     lines.push(
         "Add custom provider: /provider-add-custom <backend> <endpoint> <model> [key-ref]".into(),
     );
@@ -1189,12 +1417,46 @@ fn ensure_config(state: &mut AppState) -> Config {
             model: String::new(),
             endpoint: None,
             api_key_ref: None,
+            auth_method: ProviderAuthMethod::ApiKey,
+            oauth_token_ref: None,
         },
         providers: Vec::new(),
         embedder: Default::default(),
         storage: Default::default(),
         reuse_threshold: 0.82,
     })
+}
+
+fn provider_auth_label(provider: &ProviderConfig) -> &'static str {
+    match provider.auth_method {
+        ProviderAuthMethod::ApiKey => "API key",
+        ProviderAuthMethod::OpenAiOAuth => "OpenAI OAuth",
+        ProviderAuthMethod::Codex => "Codex",
+    }
+}
+
+fn provider_auth_tip(provider: &ProviderConfig) -> String {
+    match provider.auth_method {
+        ProviderAuthMethod::ApiKey => provider
+            .api_key_ref
+            .as_ref()
+            .map(|key_ref| format!(" Store the secret with `/vault set {key_ref} <your-key>`; the provider entry stores only the reference."))
+            .unwrap_or_else(|| " No API key reference is configured for this provider.".to_string()),
+        ProviderAuthMethod::OpenAiOAuth => {
+            let token_ref = provider
+                .oauth_token_ref
+                .as_deref()
+                .unwrap_or("provider/openai/oauth");
+            format!(" Run `/openai-login {token_ref}` to authorize ChatGPT/OpenAI OAuth; config stores only this token reference.")
+        }
+        ProviderAuthMethod::Codex => {
+            let token_ref = provider
+                .oauth_token_ref
+                .as_deref()
+                .unwrap_or("provider/codex/oauth");
+            format!(" Run `/codex-login` to authorize Codex backend; config stores only this token reference.")
+        }
+    }
 }
 
 fn maybe_fetch_models(state: &mut AppState) -> Vec<Command> {
@@ -1225,6 +1487,7 @@ fn maybe_fetch_models(state: &mut AppState) -> Vec<Command> {
 
     if !provider.backend.eq_ignore_ascii_case("openrouter")
         && !provider.backend.eq_ignore_ascii_case("ollama")
+        && provider.auth_method != ProviderAuthMethod::OpenAiOAuth
         && provider.api_key_ref.is_none()
     {
         state.push_activity(
@@ -1242,6 +1505,8 @@ fn maybe_fetch_models(state: &mut AppState) -> Vec<Command> {
         &backend,
         &endpoint,
         provider.api_key_ref,
+        provider.auth_method,
+        provider.oauth_token_ref,
         "Fetching provider models",
         &detail,
     )
@@ -1252,6 +1517,8 @@ fn queue_models_fetch(
     backend: &str,
     endpoint: &str,
     api_key_ref: Option<String>,
+    auth_method: ProviderAuthMethod,
+    oauth_token_ref: Option<String>,
     title: &str,
     detail: &str,
 ) -> Vec<Command> {
@@ -1264,6 +1531,8 @@ fn queue_models_fetch(
         backend: backend.to_string(),
         endpoint: endpoint.to_string(),
         api_key_ref,
+        auth_method,
+        oauth_token_ref,
     }]
 }
 
@@ -1297,9 +1566,19 @@ fn current_provider_models_command(state: &mut AppState) -> Vec<Command> {
         &backend,
         &endpoint,
         config.provider.api_key_ref,
+        config.provider.auth_method,
+        config.provider.oauth_token_ref,
         "Fetching current provider models",
         &detail,
     )
+}
+
+fn normalize_openai_oauth_ref(token_ref: Option<&str>) -> String {
+    token_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_OPENAI_OAUTH_TOKEN_REF)
+        .to_string()
 }
 
 fn get_provider_models(state: &AppState, backend: &str) -> Vec<String> {
@@ -1519,11 +1798,6 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                     });
                 }
                 Err(err) => {
-                    state.push_transcript(
-                        "ArgOS",
-                        format!("Request failed: {err}"),
-                        Some("GenericAgent returned an error.".into()),
-                    );
                     state.push_activity(StatusLevel::Error, "Prompt failed", err.clone());
                     state.flash = Some(FlashMessage {
                         level: StatusLevel::Error,
@@ -1592,7 +1866,6 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                     level: StatusLevel::Error,
                     text: format!("Failed to save config: {err}"),
                 });
-                state.push_transcript("System", format!("Config save failed: {err}"), None);
             }
         },
         AsyncEvent::SecretStored { key_ref, result } => match result {
@@ -1629,6 +1902,91 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
                     text: msg.clone(),
                 });
                 state.push_transcript("System", msg, None);
+            }
+        },
+        AsyncEvent::OpenAiLoginStarted { token_ref, result } => match result {
+            Ok(login) => {
+                let mut body = format!(
+                    "OpenAI OAuth login started for `{token_ref}`. Open {} and enter code {}.",
+                    login.verification_uri, login.user_code
+                );
+                if let Some(complete) = &login.verification_uri_complete {
+                    body.push_str(&format!(" Direct link: {complete}"));
+                }
+                body.push_str(
+                    " ArgOS is polling for authorization; tokens will be stored only in the vault.",
+                );
+                state.push_transcript("System", body.clone(), None);
+                state.push_activity(
+                    StatusLevel::Loading,
+                    "OpenAI OAuth login pending",
+                    format!(
+                        "Waiting for code {} authorization; token_ref={token_ref}.",
+                        login.user_code
+                    ),
+                );
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Loading,
+                    text: format!("OpenAI code: {}", login.user_code),
+                });
+                return vec![Command::CompleteOpenAiLogin { login }];
+            }
+            Err(err) => {
+                state.push_activity(StatusLevel::Error, "OpenAI OAuth login failed", err.clone());
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: err,
+                });
+            }
+        },
+        AsyncEvent::OpenAiLoginCompleted { token_ref, result } => match result {
+            Ok(()) => {
+                let msg = format!(
+                    "OpenAI OAuth login completed. Token JSON was stored in vault ref `{token_ref}`."
+                );
+                state.push_transcript("System", msg.clone(), None);
+                state.push_activity(
+                    StatusLevel::Success,
+                    "OpenAI OAuth login completed",
+                    format!("Stored refreshed credentials at token_ref={token_ref}."),
+                );
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Success,
+                    text: msg,
+                });
+
+                ensure_openai_oauth_provider(state, &token_ref);
+
+                let mut cmds: Vec<Command> = vec![Command::SaveConfig {
+                    config: Box::new(ensure_config(state)),
+                }, Command::LoadSnapshot];
+                cmds.extend(maybe_fetch_models(state));
+                return cmds;
+            }
+            Err(err) => {
+                state.push_activity(StatusLevel::Error, "OpenAI OAuth login failed", err.clone());
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: err,
+                });
+            }
+        },
+        AsyncEvent::CodexLoginCompleted { result } => match result {
+            Ok(()) => {
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Success,
+                    text: "Codex login completed!".into(),
+                });
+                ensure_codex_provider(state);
+                return vec![Command::SaveConfig {
+                    config: Box::new(ensure_config(state)),
+                }];
+            }
+            Err(err) => {
+                state.flash = Some(FlashMessage {
+                    level: StatusLevel::Error,
+                    text: format!("Codex login failed: {err}"),
+                });
             }
         },
         AsyncEvent::ModelsFetched { backend, models } => match models {
@@ -1778,7 +2136,9 @@ mod tests {
     };
     use crate::state::{AppState, FocusPane, ModelInfo, StatusLevel, WorkflowItem};
     use argos_agent::AgentOutput;
-    use argos_core::{AgentState, Config, N8nRunRef, N8nRunStatus, ProviderConfig};
+    use argos_core::{
+        AgentState, Config, N8nRunRef, N8nRunStatus, ProviderAuthMethod, ProviderConfig,
+    };
 
     fn test_config(providers: Vec<ProviderConfig>) -> Config {
         let provider = providers
@@ -1789,6 +2149,8 @@ mod tests {
                 model: String::new(),
                 endpoint: None,
                 api_key_ref: None,
+                auth_method: ProviderAuthMethod::ApiKey,
+                oauth_token_ref: None,
             });
         Config {
             n8n: None,
@@ -1811,6 +2173,8 @@ mod tests {
             model: model.into(),
             endpoint: endpoint.map(str::to_string),
             api_key_ref: key_ref.map(str::to_string),
+            auth_method: ProviderAuthMethod::ApiKey,
+            oauth_token_ref: None,
         }
     }
 
@@ -1950,6 +2314,96 @@ mod tests {
             Some("provider/local/api_key")
         );
         assert_eq!(config.providers, vec![config.provider.clone()]);
+    }
+
+    #[test]
+    fn adding_openai_oauth_provider_stores_only_oauth_ref() {
+        let mut state = AppState::new();
+        for ch in "/provider-add-openai-oauth gpt-4.1 provider/openai/oauth".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+        let Command::SaveConfig { config } = commands.first().unwrap() else {
+            panic!("expected config save");
+        };
+
+        assert_eq!(config.provider.backend, "openai");
+        assert_eq!(config.provider.auth_method, ProviderAuthMethod::OpenAiOAuth);
+        assert_eq!(
+            config.provider.oauth_token_ref.as_deref(),
+            Some("provider/openai/oauth")
+        );
+        assert!(config.provider.api_key_ref.is_none());
+        assert_eq!(config.providers, vec![config.provider.clone()]);
+        assert!(matches!(
+            commands.get(1),
+            Some(Command::StartOpenAiLogin { token_ref }) if token_ref == "provider/openai/oauth"
+        ));
+    }
+
+    #[test]
+    fn openai_login_command_emits_async_login_without_token_leakage() {
+        let mut state = AppState::new();
+        for ch in "/openai-login provider/openai/oauth".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        assert_eq!(
+            commands,
+            vec![Command::StartOpenAiLogin {
+                token_ref: "provider/openai/oauth".into()
+            }]
+        );
+        let body = &state.transcript.last().unwrap().body;
+        assert!(body.contains("Starting OpenAI OAuth login"));
+        assert!(!body.contains("access_token"));
+        assert!(!body.contains("refresh_token"));
+    }
+
+    #[test]
+    fn openai_login_rejects_api_key_or_other_provider_refs() {
+        for input in [
+            "/openai-login provider/openai/api_key",
+            "/openai-login provider/openrouter/oauth",
+            "/provider-login openai provider/anthropic/oauth",
+        ] {
+            let mut state = AppState::new();
+            for ch in input.chars() {
+                state.composer.insert_char(ch);
+            }
+
+            let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+            assert!(commands.is_empty(), "{input} should not start login");
+            assert!(state
+                .transcript
+                .last()
+                .unwrap()
+                .body
+                .contains("Invalid OpenAI OAuth token ref"));
+        }
+    }
+
+    #[test]
+    fn adding_openai_oauth_provider_rejects_invalid_oauth_ref_before_save() {
+        let mut state = AppState::new();
+        for ch in "/provider-add-openai-oauth gpt-4.1 provider/openai/api_key".chars() {
+            state.composer.insert_char(ch);
+        }
+
+        let commands = handle_action(&mut state, Action::SubmitPrompt);
+
+        assert!(commands.is_empty());
+        assert!(state.current_config.is_none());
+        assert!(state
+            .transcript
+            .last()
+            .unwrap()
+            .body
+            .contains("Invalid OpenAI OAuth token ref"));
     }
 
     #[test]
@@ -2165,7 +2619,7 @@ mod tests {
     }
 
     #[test]
-    fn async_prompt_failure_adds_error_transcript() {
+    fn async_prompt_failure_shows_flash_error() {
         let mut state = AppState::new();
         state.is_submitting_prompt = true;
 
@@ -2178,12 +2632,8 @@ mod tests {
         );
 
         assert!(!state.is_submitting_prompt);
-        assert!(state
-            .transcript
-            .last()
-            .unwrap()
-            .body
-            .contains("Request failed: boom"));
+        assert!(state.transcript.is_empty());
+        assert_eq!(state.flash.as_ref().unwrap().text, "boom");
     }
 
     #[test]

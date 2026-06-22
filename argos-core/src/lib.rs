@@ -14,7 +14,9 @@ pub mod okf;
 
 pub use agent::{AgentId, AgentState, Hand, Tool, ToolInvocation, ToolResult};
 pub use common::{Embedding, SimilarityHit, Timestamp};
-pub use config::{Config, EmbedderConfig, ProviderConfig, StorageProfile};
+pub use config::{
+    Config, EmbedderConfig, OpenAiOAuthToken, ProviderAuthMethod, ProviderConfig, StorageProfile,
+};
 pub use error::{ArgosError, Result};
 pub use n8n::{ConnMode, N8nConnection, N8nRunRef, N8nRunStatus, N8nWorkflowRef};
 pub use okf::{
