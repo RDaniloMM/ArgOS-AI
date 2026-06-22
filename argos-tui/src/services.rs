@@ -1194,10 +1194,15 @@ pub async fn start_codex_login() -> Result<(), String> {
         return Err("OAuth state parameter mismatch".to_string());
     }
 
-    // 6. Send response to browser
-    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 93\r\n\r\n<html><body><h1>Authorization successful!</h1><p>You may close this tab.</p></body></html>";
+    // 6. Send response to browser (explicit charset so Spanish characters render)
+    let body = "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\"><title>Autorizado</title></head><body><h1>✓ Autorizado</h1><p>Ya podés cerrar esta pestaña.</p></body></html>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
     stream
-        .write_all(response)
+        .write_all(response.as_bytes())
         .await
         .map_err(|e| format!("failed to write callback response: {e}"))?;
 

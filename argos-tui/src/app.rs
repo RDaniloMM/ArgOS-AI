@@ -154,7 +154,8 @@ pub fn handle_action(state: &mut AppState, action: Action) -> Vec<Command> {
                         "Prompt submitted",
                         "Waiting for GenericAgent output.",
                     );
-                    state.focus = FocusPane::Transcript;
+                    // Focus stays on the Composer so the user can continue typing
+                    // without manually refocusing after every response.
                     state.is_submitting_prompt = true;
                     state.flash = Some(FlashMessage {
                         level: StatusLevel::Loading,

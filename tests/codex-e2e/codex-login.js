@@ -67,13 +67,13 @@ function startCallbackServer() {
                 if (code) console.log(`     code: ${code.substring(0, 12)}...`);
                 if (error) console.log(`     error: ${error} ${errDesc ? `(${errDesc})` : ''}`);
 
-                // Responder OK y cerrar conexión inmediatamente
+                // Responder OK con charset explícito para caracteres español
                 const body =
-                    '<html><body><h1>✓ Autorizado</h1><p>Ya podés cerrar esta pestaña.</p></body></html>';
+                    '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Autorizado</title></head><body><h1>✓ Autorizado</h1><p>Ya podés cerrar esta pestaña.</p></body></html>';
                 socket.write(
                     [
                         'HTTP/1.1 200 OK',
-                        'Content-Type: text/html',
+                        'Content-Type: text/html; charset=utf-8',
                         `Content-Length: ${Buffer.byteLength(body)}`,
                         'Connection: close',
                         '',

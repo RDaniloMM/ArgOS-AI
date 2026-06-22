@@ -186,54 +186,58 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         render_command_palette(frame, area, state);
     }
 
-    if let Some(flash) = &state.flash {
-        let label = flash.level.label();
-        let text = format!(" {} {}", label, flash.text);
-        let max_text_w = area.width.saturating_sub(4).min(72).max(20) as usize;
-        let chars_per_line = max_text_w.saturating_sub(4);
-        let lines = if text.len() <= chars_per_line {
-            1
-        } else {
-            let wrapped = text.len().div_ceil(chars_per_line.max(1));
-            wrapped.min(8)
-        };
-        let pad = 1u16;
-        let box_w = (text.len() + 4).min(max_text_w) as u16;
-        let inner_h = lines as u16;
-        let box_h = inner_h + pad * 2;
-        let toast = Rect {
-            x: area.x + area.width.saturating_sub(box_w + 1),
-            y: area.y + area.height.saturating_sub(box_h + 1),
-            width: box_w,
-            height: box_h,
-        };
-        let bg = match flash.level {
-            StatusLevel::Success => Color::DarkGray,
-            StatusLevel::Error => Color::Red,
-            StatusLevel::Loading => Color::Yellow,
-            StatusLevel::Missing => Color::Blue,
-        };
-        frame.render_widget(Clear, toast);
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(bg))
-                .style(Style::default().bg(Color::Black)),
-            toast,
-        );
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                text,
-                Style::default().fg(Color::White).bg(Color::Black),
-            )))
-            .wrap(Wrap { trim: true }),
-            Rect {
-                x: toast.x + pad,
-                y: toast.y + pad,
-                width: box_w.saturating_sub(pad * 2),
-                height: inner_h,
-            },
-        );
+    // Flash toasts only in debug/dev builds — release builds suppress them
+    // since the user already sees transcript updates without overlay popups.
+    if cfg!(debug_assertions) {
+        if let Some(flash) = &state.flash {
+            let label = flash.level.label();
+            let text = format!(" {} {}", label, flash.text);
+            let max_text_w = area.width.saturating_sub(4).min(72).max(20) as usize;
+            let chars_per_line = max_text_w.saturating_sub(4);
+            let lines = if text.len() <= chars_per_line {
+                1
+            } else {
+                let wrapped = text.len().div_ceil(chars_per_line.max(1));
+                wrapped.min(8)
+            };
+            let pad = 1u16;
+            let box_w = (text.len() + 4).min(max_text_w) as u16;
+            let inner_h = lines as u16;
+            let box_h = inner_h + pad * 2;
+            let toast = Rect {
+                x: area.x + area.width.saturating_sub(box_w + 1),
+                y: area.y + area.height.saturating_sub(box_h + 1),
+                width: box_w,
+                height: box_h,
+            };
+            let bg = match flash.level {
+                StatusLevel::Success => Color::DarkGray,
+                StatusLevel::Error => Color::Red,
+                StatusLevel::Loading => Color::Yellow,
+                StatusLevel::Missing => Color::Blue,
+            };
+            frame.render_widget(Clear, toast);
+            frame.render_widget(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(bg))
+                    .style(Style::default().bg(Color::Black)),
+                toast,
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    text,
+                    Style::default().fg(Color::White).bg(Color::Black),
+                )))
+                .wrap(Wrap { trim: true }),
+                Rect {
+                    x: toast.x + pad,
+                    y: toast.y + pad,
+                    width: box_w.saturating_sub(pad * 2),
+                    height: inner_h,
+                },
+            );
+        }
     }
 }
 
