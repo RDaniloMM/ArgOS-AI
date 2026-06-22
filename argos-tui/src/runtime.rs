@@ -201,11 +201,9 @@ fn dispatch_commands(
                         result: services.complete_openai_login(login).await,
                     })
                 }
-                Command::StartCodexLogin => {
-                    Event::Async(AsyncEvent::CodexLoginCompleted {
-                        result: start_codex_login().await,
-                    })
-                }
+                Command::StartCodexLogin => Event::Async(AsyncEvent::CodexLoginCompleted {
+                    result: start_codex_login().await,
+                }),
                 Command::FetchModels {
                     backend,
                     endpoint,

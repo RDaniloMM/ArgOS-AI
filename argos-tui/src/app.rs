@@ -568,11 +568,7 @@ fn handle_popup_action(state: &mut AppState, action: Action) -> Vec<Command> {
             };
             remove_configured_provider(state, &backend);
             state.provider_popup.visible = false;
-            state.push_transcript(
-                "System",
-                format!("Removed provider `{backend}`."),
-                None,
-            );
+            state.push_transcript("System", format!("Removed provider `{backend}`."), None);
             state.flash = Some(FlashMessage {
                 level: StatusLevel::Success,
                 text: format!("Removed provider `{backend}`."),
@@ -1957,9 +1953,12 @@ pub fn handle_async(state: &mut AppState, event: AsyncEvent) -> Vec<Command> {
 
                 ensure_openai_oauth_provider(state, &token_ref);
 
-                let mut cmds: Vec<Command> = vec![Command::SaveConfig {
-                    config: Box::new(ensure_config(state)),
-                }, Command::LoadSnapshot];
+                let mut cmds: Vec<Command> = vec![
+                    Command::SaveConfig {
+                        config: Box::new(ensure_config(state)),
+                    },
+                    Command::LoadSnapshot,
+                ];
                 cmds.extend(maybe_fetch_models(state));
                 return cmds;
             }

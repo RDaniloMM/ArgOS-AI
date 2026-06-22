@@ -12,14 +12,15 @@ use argos_core::{
     ProviderConfig,
 };
 use argos_n8n_connector::{N8nConnector, ReqwestN8nClient};
-use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
-use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
+use argos_provider::aisdk_provider::AisdkProvider;
+use argos_provider::Provider as ArgosProvider;
 use argos_security::{MemoryVault, SecretVault};
 use async_trait::async_trait;
 
 const DEFAULT_REUSE_THRESHOLD: f64 = 0.82;
 const DESKTOP_KEYRING_SERVICE: &str = "argos-ui";
-
+const OPENAI_API_ENDPOINT: &str = "https://api.openai.com/v1";
+const CODEX_API_KEY_REF: &str = "provider/codex/api_key";
 /// A provider preset displayed in the desktop UI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -332,12 +333,7 @@ pub async fn test_provider(input: &ProviderInput) -> Result<ProviderStatus, Stri
         .map_err(|e| format!("invalid endpoint: {e}"))?;
 
     if input.preset_id == "ollama" {
-        let config = OllamaConfig {
-            endpoint,
-            model: input.model.clone(),
-            embed_model: None,
-        };
-        let provider = OllamaProvider::new(config, ReqwestHttpClient::default());
+        let provider = AisdkProvider::new_ollama(endpoint, input.model.clone());
         match provider.health_check().await {
             Ok(()) => Ok(ProviderStatus {
                 connected: true,
@@ -349,13 +345,8 @@ pub async fn test_provider(input: &ProviderInput) -> Result<ProviderStatus, Stri
             }),
         }
     } else {
-        let config = OpenAICompatibleConfig {
-            endpoint,
-            api_key: input.api_key.clone(),
-            model: input.model.clone(),
-            embed_model: None,
-        };
-        let provider = OpenAICompatibleProvider::new(config);
+        let provider =
+            AisdkProvider::new_openai(endpoint, input.api_key.clone(), input.model.clone());
         match provider.health_check().await {
             Ok(()) => Ok(ProviderStatus {
                 connected: true,
@@ -369,39 +360,110 @@ pub async fn test_provider(input: &ProviderInput) -> Result<ProviderStatus, Stri
     }
 }
 
-fn provider_from_input(input: &ProviderInput) -> Result<Arc<dyn ArgosProvider>, String> {
-    let endpoint = url::Url::parse(&normalize_endpoint(&input.endpoint))
-        .map_err(|e| format!("invalid provider endpoint: {e}"))?;
-
-    if input.preset_id == "ollama" {
-        Ok(Arc::new(OllamaProvider::new(
-            OllamaConfig {
-                endpoint,
-                model: input.model.clone(),
-                embed_model: None,
-            },
-            ReqwestHttpClient::default(),
-        )))
-    } else {
-        Ok(Arc::new(OpenAICompatibleProvider::new(
-            OpenAICompatibleConfig {
-                endpoint,
-                api_key: input.api_key.clone(),
-                model: input.model.clone(),
-                embed_model: None,
-            },
-        )))
+fn default_endpoint_for_backend(backend: &str) -> Option<&'static str> {
+    match backend {
+        "openai" | "codex" => Some(OPENAI_API_ENDPOINT),
+        "anthropic" => Some("https://api.anthropic.com/v1"),
+        "google" => Some("https://generativelanguage.googleapis.com/v1beta"),
+        "ollama" => Some("http://localhost:11434"),
+        "opencode" => Some("https://opencode.ai/zen/go/v1"),
+        "deepseek" => Some("https://api.deepseek.com/v1"),
+        _ => None,
     }
 }
 
+fn endpoint_from_config(config: &ProviderConfig, backend: &str) -> Result<url::Url, String> {
+    let raw = config
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| default_endpoint_for_backend(backend))
+        .ok_or_else(|| format!("provider `{}` is missing an endpoint.", config.backend))?;
+
+    if raw.contains("chatgpt.com/backend-api") || raw.contains("chat.openai.com/backend-api") {
+        return Err(
+            "`chatgpt.com/backend-api` is not an OpenAI-compatible endpoint. \
+            Use `https://api.openai.com/v1` with the token-exchanged Codex API key, \
+            or implement a dedicated ChatGPT/Codex backend client instead of OpenAICompatibleProvider."
+                .to_string(),
+        );
+    }
+
+    url::Url::parse(raw).map_err(|e| format!("invalid provider endpoint `{raw}`: {e}"))
+}
+
+async fn retrieve_secret(vault: &dyn SecretVault, key_ref: &str) -> Result<String, String> {
+    vault.retrieve(key_ref).await.map_err(|e| {
+        format!("secret `{key_ref}` could not be read from {DESKTOP_KEYRING_SERVICE}: {e}")
+    })
+}
+
+fn openai_compatible_provider(
+    endpoint: url::Url,
+    api_key: String,
+    model: String,
+) -> Arc<dyn ArgosProvider> {
+    Arc::new(AisdkProvider::new_openai(endpoint, api_key, model))
+}
+
+async fn provider_from_config(config: &ProviderConfig) -> Result<Arc<dyn ArgosProvider>, String> {
+    let backend = config.backend.trim().to_lowercase();
+
+    if backend == "ollama" {
+        return Ok(Arc::new(AisdkProvider::new_ollama(
+            endpoint_from_config(config, &backend)?,
+            config.model.clone(),
+        )));
+    }
+
+    let vault = desktop_vault();
+
+    match config.auth_method {
+        ProviderAuthMethod::ApiKey => {
+            let key_ref = config.api_key_ref.as_deref().ok_or_else(|| {
+                format!(
+                    "provider `{}` uses API-key auth but is missing api_key_ref.",
+                    config.backend
+                )
+            })?;
+
+            let api_key = retrieve_secret(&vault, key_ref).await?;
+
+            Ok(openai_compatible_provider(
+                endpoint_from_config(config, &backend)?,
+                api_key,
+                config.model.clone(),
+            ))
+        }
+        ProviderAuthMethod::Codex => {
+            let api_key = retrieve_secret(&vault, CODEX_API_KEY_REF).await.map_err(|err| {
+                format!(
+                    "Codex OAuth is configured, but the token-exchanged API key `{CODEX_API_KEY_REF}` is not available. Run the Codex login flow again so ArgOS stores the exchanged OpenAI API key. Original error: {err}"
+                )
+            })?;
+
+            Ok(openai_compatible_provider(
+                url::Url::parse(OPENAI_API_ENDPOINT)
+                    .expect("static OpenAI API endpoint must parse"),
+                api_key,
+                config.model.clone(),
+            ))
+        }
+        ProviderAuthMethod::OpenAiOAuth => Err(
+            "OpenAI ChatGPT OAuth is configured, but argos-ui cannot route raw ChatGPT OAuth tokens through OpenAI-compatible `/chat/completions`. Use an OpenAI API key, or use the Codex login flow that stores `provider/codex/api_key` before sending prompts."
+                .to_string(),
+        ),
+    }
+}
 pub async fn run_assistant(config_dir: &Path, prompt: &str) -> Result<AssistantResponse, String> {
-    let provider_input = load_current_provider(config_dir).await?.ok_or_else(|| {
+    let config = load_config(config_dir)?.ok_or_else(|| {
         "No provider is configured yet. Open Provider and save a model first.".to_string()
     })?;
 
-    let provider_backend = provider_input.preset_id.clone();
-    let model = provider_input.model.clone();
-    let provider = provider_from_input(&provider_input)?;
+    let provider_backend = config.provider.backend.clone();
+    let model = config.provider.model.clone();
+    let provider = provider_from_config(&config.provider).await?;
     let tools = Arc::new(ToolRegistry::new());
     let mut agent = GenericAgent::new("argos-ui-assistant", provider, tools);
     let output = agent.run(prompt).await.map_err(|e| e.to_string())?;
@@ -427,7 +489,6 @@ pub async fn run_assistant(config_dir: &Path, prompt: &str) -> Result<AssistantR
         tool_invocations,
     })
 }
-
 async fn build_n8n_connector(
     config_dir: &Path,
 ) -> Result<Option<(N8nConnection, N8nConnector)>, String> {

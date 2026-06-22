@@ -22,7 +22,7 @@ argos-security = { path = "../argos-security", features = ["keyring-backend"] }
 argos-lib = { path = "../argos-lib" }
 argos-agent = { path = "../argos-agent" }
 argos-n8n-connector = { path = "../argos-n8n-connector", features = ["reqwest-backend"] }
-argos-provider = { path = "../argos-provider", features = ["reqwest-backend"] }
+argos-provider = { path = "../argos-provider" }
 url = { workspace = true }
 
 [dev-dependencies]

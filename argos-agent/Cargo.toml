@@ -29,5 +29,5 @@ tokio = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
 # Enable reqwest backends for real LLM + real n8n integration tests.
-argos-provider = { path = "../argos-provider", features = ["reqwest-backend"] }
+argos-provider = { path = "../argos-provider" }
 argos-n8n-connector = { path = "../argos-n8n-connector", features = ["reqwest-backend"] }

@@ -5,13 +5,10 @@
 //! [`provider::Provider`] trait is the single seam that keeps per-provider quirks
 //! out of the agent loop (ADR-005). Implementation lands in later tasks.
 
-pub mod ollama;
-pub mod openai_compatible;
+pub mod aisdk_provider;
 pub mod provider;
 
-pub use ollama::{HttpClient, OllamaConfig, OllamaProvider, StubHttpClient};
-#[cfg(feature = "reqwest-backend")]
-pub use openai_compatible::{OpenAICompatibleConfig, OpenAICompatibleProvider};
+pub use aisdk_provider::{AisdkProvider, ProviderBackend};
 pub use provider::{
     Completion, CompletionOptions, FinishReason, Provider, ProviderCapabilities, TokenUsage,
 };

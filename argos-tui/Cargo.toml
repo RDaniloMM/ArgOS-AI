@@ -24,6 +24,6 @@ rand = "0.8"
 sha2 = { workspace = true }
 argos-core = { path = "../argos-core" }
 argos-agent = { path = "../argos-agent" }
-argos-provider = { path = "../argos-provider", features = ["reqwest-backend"] }
+argos-provider = { path = "../argos-provider" }
 argos-n8n-connector = { path = "../argos-n8n-connector", features = ["reqwest-backend"] }
 argos-security = { path = "../argos-security", features = ["keyring-backend"] }

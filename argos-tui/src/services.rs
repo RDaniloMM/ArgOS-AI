@@ -7,8 +7,8 @@ use argos_core::{
     ProviderConfig,
 };
 use argos_n8n_connector::{N8nConnector, ReqwestN8nClient};
-use argos_provider::ollama::{OllamaConfig, OllamaProvider, ReqwestHttpClient};
-use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider as ArgosProvider};
+use argos_provider::aisdk_provider::AisdkProvider;
+use argos_provider::Provider as ArgosProvider;
 use argos_security::{KeyringVault, SecretVault};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -31,8 +31,6 @@ const CODEX_SCOPE: &str = "openid profile email offline_access";
 const CODEX_ORIGINATOR: &str = "argos-ui";
 const CODEX_TOKEN_REF: &str = "provider/codex/oauth";
 pub const CODEX_API_KEY_REF: &str = "provider/codex/api_key";
-
-
 
 #[derive(Debug, Clone)]
 pub struct ProviderSnapshot {
@@ -269,11 +267,17 @@ impl AppServices for RealServices {
                     req = req.header("Authorization", format!("Bearer {access_token}"));
                 }
                 ProviderAuthMethod::Codex => {
-                    let token_ref = oauth_token_ref.ok_or_else(|| {
-                        "Codex provider is missing oauth_token_ref. Run `/codex-login` first.".to_string()
-                    })?;
-                    let access_token = retrieve_openai_oauth_bearer(token_ref).await?;
-                    req = req.header("Authorization", format!("Bearer {access_token}"));
+                    if let Ok(api_key) = retrieve_secret(Some(CODEX_API_KEY_REF)).await {
+                        if !api_key.trim().is_empty() {
+                            req = req.header("Authorization", format!("Bearer {api_key}"));
+                        }
+                    } else {
+                        let token_ref = oauth_token_ref.ok_or_else(|| {
+                            "Codex provider is missing oauth_token_ref. Run `/codex-login` first.".to_string()
+                        })?;
+                        let access_token = retrieve_openai_oauth_bearer(token_ref).await?;
+                        req = req.header("Authorization", format!("Bearer {access_token}"));
+                    }
                 }
             }
         }
@@ -409,24 +413,17 @@ async fn build_provider_from_config(
     let endpoint = provider_endpoint(config, &backend)?;
 
     if backend == "ollama" {
-        return Ok(Arc::new(OllamaProvider::new(
-            OllamaConfig {
-                endpoint,
-                model: config.model.clone(),
-                embed_model: None,
-            },
-            ReqwestHttpClient::default(),
+        return Ok(Arc::new(AisdkProvider::new_ollama(
+            endpoint,
+            config.model.clone(),
         )));
     }
 
     let api_key = provider_bearer_token(config, &backend).await?;
-    Ok(Arc::new(OpenAICompatibleProvider::new(
-        OpenAICompatibleConfig {
-            endpoint,
-            api_key,
-            model: config.model.clone(),
-            embed_model: None,
-        },
+    Ok(Arc::new(AisdkProvider::new_openai(
+        endpoint,
+        api_key,
+        config.model.clone(),
     )))
 }
 
@@ -446,12 +443,19 @@ async fn provider_bearer_token(config: &ProviderConfig, backend: &str) -> Result
             retrieve_openai_oauth_bearer(token_ref).await
         }
         ProviderAuthMethod::Codex => {
-            // Use OAuth bearer (access_token from auth.openai.com) directly
-            // against api.openai.com/v1. This requires OpenAI's API to accept
-            // ChatGPT OAuth tokens — if that fails we'll know and can iterate.
+            // Prefer the token-exchanged API key stored by `start_codex_login`.
+            // Raw ChatGPT OAuth access tokens are not a drop-in replacement for
+            // OpenAI-compatible `/chat/completions`, which is what caused 404s.
+            if let Ok(api_key) = retrieve_secret(Some(CODEX_API_KEY_REF)).await {
+                if !api_key.trim().is_empty() {
+                    return Ok(api_key);
+                }
+            }
+
             let token_ref = config.oauth_token_ref.as_deref().ok_or_else(|| {
                 "Codex provider is missing oauth_token_ref. Run `/codex-login` first.".to_string()
             })?;
+
             retrieve_openai_oauth_bearer(token_ref).await
         }
     }
@@ -1142,13 +1146,11 @@ pub async fn start_codex_login() -> Result<(), String> {
     let _ = open_browser(&auth_url);
 
     // 4. Wait for OAuth callback (5-minute timeout)
-    let (mut stream, _) = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
-        listener.accept(),
-    )
-    .await
-    .map_err(|_| "Codex login timed out waiting for browser callback (300s)".to_string())?
-    .map_err(|e| format!("TCP accept failed: {e}"))?;
+    let (mut stream, _) =
+        tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
+            .await
+            .map_err(|_| "Codex login timed out waiting for browser callback (300s)".to_string())?
+            .map_err(|e| format!("TCP accept failed: {e}"))?;
 
     // 5. Parse callback HTTP request
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1168,7 +1170,9 @@ pub async fn start_codex_login() -> Result<(), String> {
         .ok_or_else(|| "callback request has no query string".to_string())?;
 
     let callback_params: std::collections::HashMap<String, String> =
-        url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
+        url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect();
 
     let auth_code = callback_params
         .get("code")
@@ -1240,8 +1244,8 @@ pub async fn start_codex_login() -> Result<(), String> {
         account_label: None,
     };
 
-    let token_json =
-        serde_json::to_string(&token).map_err(|e| format!("failed to serialize codex token: {e}"))?;
+    let token_json = serde_json::to_string(&token)
+        .map_err(|e| format!("failed to serialize codex token: {e}"))?;
 
     // 8. Store OAuth token in vault (for later refresh)
     let mut vault = KeyringVault::new(SHARED_KEYRING_SERVICE);
@@ -1256,11 +1260,17 @@ pub async fn start_codex_login() -> Result<(), String> {
         let api_key_resp = client
             .post("https://auth.openai.com/oauth/token")
             .form(&[
-                ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:token-exchange",
+                ),
                 ("client_id", OPENAI_OAUTH_CLIENT_ID),
                 ("requested_token", "openai-api-key"),
                 ("subject_token", id_token),
-                ("subject_token_type", "urn:ietf:params:oauth:token-type:id_token"),
+                (
+                    "subject_token_type",
+                    "urn:ietf:params:oauth:token-type:id_token",
+                ),
                 ("scope", "model.request"),
             ])
             .send()

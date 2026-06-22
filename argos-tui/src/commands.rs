@@ -473,7 +473,9 @@ pub const KNOWN_PROVIDERS: &[KnownProvider] = &[
         backend: "codex",
         default_endpoint: Some("https://chatgpt.com/backend-api"),
         default_key_ref: None,
-        models: &["gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5.0", "gpt-4.1", "o4-mini", "o3"],
+        models: &[
+            "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5.0", "gpt-4.1", "o4-mini", "o3",
+        ],
         pricing: None,
     },
 ];

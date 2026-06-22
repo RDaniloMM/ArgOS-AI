@@ -19,21 +19,21 @@ use std::sync::Arc;
 use argos_agent::{Agent, GenericAgent, ToolHandler, ToolRegistry};
 use argos_core::ToolResult;
 use argos_n8n_connector::{N8nClient, ReqwestN8nClient};
-use argos_provider::{OpenAICompatibleConfig, OpenAICompatibleProvider, Provider};
+use argos_provider::aisdk_provider::AisdkProvider;
+use argos_provider::Provider;
 use url::Url;
 
 // --- Configuration (env vars with fallback defaults) ---
 
-fn llm_config() -> OpenAICompatibleConfig {
+fn llm_provider() -> AisdkProvider {
     let api_key = std::env::var("ARGOS_LLM_API_KEY").unwrap_or_else(|_| {
         "sk-cuQFmt50IsmxHsVp0cyQT6f2DoB1UCvEdi4nka5gvO2oteLb185jLNEGlUzCXieA".to_string()
     });
-    OpenAICompatibleConfig {
-        endpoint: Url::parse("https://opencode.ai/zen/go/v1").unwrap(),
+    AisdkProvider::new_openai(
+        Url::parse("https://opencode.ai/zen/go/v1").unwrap(),
         api_key,
-        model: "deepseek-v4-flash".to_string(),
-        embed_model: None, // DeepSeek-V4-flash doesn't support embeddings
-    }
+        "deepseek-v4-flash".to_string(),
+    )
 }
 
 fn n8n_client() -> ReqwestN8nClient {
@@ -114,7 +114,7 @@ impl ToolHandler for N8nSummaryTool {
 #[tokio::test]
 #[ignore = "requires real LLM (OpenCode Go) + real n8n (localhost:5678)"]
 async fn real_llm_health_check() {
-    let provider = OpenAICompatibleProvider::new(llm_config());
+    let provider = llm_provider();
     let result = provider.health_check().await;
     assert!(
         result.is_ok(),
@@ -126,7 +126,7 @@ async fn real_llm_health_check() {
 #[tokio::test]
 #[ignore = "requires real LLM (OpenCode Go) + real n8n (localhost:5678)"]
 async fn real_llm_completion() {
-    let provider = OpenAICompatibleProvider::new(llm_config());
+    let provider = llm_provider();
     let completion = provider
         .complete(
             "What is 2+2? Reply with just the number.",
@@ -156,7 +156,7 @@ async fn real_llm_completion() {
 #[ignore = "requires real LLM (OpenCode Go) + real n8n (localhost:5678)"]
 async fn real_agent_lists_n8n_workflows() {
     // Set up the real LLM provider.
-    let provider = Arc::new(OpenAICompatibleProvider::new(llm_config()));
+    let provider = Arc::new(llm_provider());
 
     // Set up the real n8n client.
     let n8n = Arc::new(n8n_client()) as Arc<dyn N8nClient>;
@@ -250,7 +250,7 @@ async fn real_agent_full_flow() {
     println!("Workflow activated");
 
     // Step 3: Create agent with real LLM + n8n tools.
-    let provider = Arc::new(OpenAICompatibleProvider::new(llm_config()));
+    let provider = Arc::new(llm_provider());
     let mut registry = ToolRegistry::new();
     registry.register(
         "n8n.list",
